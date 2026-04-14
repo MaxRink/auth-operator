@@ -27,8 +27,9 @@ spec:
       {{- end }}
       {{- if .Values.metrics.auth.enabled }}
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      {{- $tlsConfig := .Values.metrics.serviceMonitor.tlsConfig | default dict }}
       tlsConfig:
-        insecureSkipVerify: true
+        insecureSkipVerify: {{ default true $tlsConfig.insecureSkipVerify }}
       {{- end }}
   selector:
     matchLabels:
