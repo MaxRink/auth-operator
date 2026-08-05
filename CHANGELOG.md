@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-rc.2] — Pre-release
+
 ### Changed
 
 - RestrictedRoleDefinition enforces immutable `spec.policyRef`, `spec.targetRole`, `spec.targetName`, and `spec.targetNamespace` after creation. RestrictedBindDefinition enforces immutable `spec.policyRef` and `spec.targetName` after creation. RoleDefinition now also enforces immutable `spec.targetNamespace`. To change these fields, recreate the resource with the desired values.
@@ -138,6 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflows for SBOM attestation and image signature verification
 
-[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.4.0-rc.12...HEAD
+[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.2...HEAD
+[0.5.0-rc.2]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.1...v0.5.0-rc.2
 [0.4.0-rc.12]: https://github.com/telekom/auth-operator/compare/v0.4.0-rc.5...v0.4.0-rc.12
 [0.4.0-rc.5]: https://github.com/telekom/auth-operator/releases/tag/v0.4.0-rc.5
