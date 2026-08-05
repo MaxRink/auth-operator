@@ -17,6 +17,7 @@ import (
 	"golang.org/x/time/rate"
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -661,11 +662,27 @@ func (wa *Authorizer) evaluateSAR(ctx context.Context, sar *authzv1.SubjectAcces
 			"index", i,
 			"user", sar.Spec.User)
 
+		// Impersonation kill switch: an authorizer with
+		// impersonationVerbPolicy=Deny explicitly rejects any matching constrained
+		// impersonation request regardless of the principal lists.
+		if ruleIdx := wa.matchesImpersonationDeny(&webhookAuthorizer, sar); ruleIdx >= 0 {
+			return evaluationResult{
+				allowed:        false,
+				reason:         fmt.Sprintf("Constrained impersonation denied by WebhookAuthorizer %s", webhookAuthorizer.Name),
+				decision:       pkgmetrics.AuthorizerDecisionDenied,
+				authorizerName: webhookAuthorizer.Name,
+				matchedRule:    ruleIdx,
+				matchedField:   "impersonationVerbPolicy",
+				evaluatedCount: evaluated,
+				skippedCount:   skipped,
+			}, nil
+		}
+
 		// Check DeniedPrincipals. Denies are scoped by the same resource and
 		// non-resource rules as allows; otherwise a deny-list entry in a
 		// namespaced authorizer would block unrelated requests in that namespace.
-		if wa.principalMatches(sar.Spec.User, sar.Spec.Groups, webhookAuthorizer.Spec.DeniedPrincipals) {
-			if ruleIdx := wa.matchRequestRule(webhookAuthorizer.Spec.ResourceRules, webhookAuthorizer.Spec.NonResourceRules, sar); ruleIdx >= 0 {
+		if wa.principalMatches(sar, webhookAuthorizer.Spec.DeniedPrincipals) {
+			if ruleIdx := wa.matchRequestRule(&webhookAuthorizer, sar); ruleIdx >= 0 {
 				return evaluationResult{
 					allowed:        false,
 					reason:         fmt.Sprintf("Access denied by WebhookAuthorizer %s", webhookAuthorizer.Name),
@@ -680,8 +697,8 @@ func (wa *Authorizer) evaluateSAR(ctx context.Context, sar *authzv1.SubjectAcces
 		}
 
 		// Check AllowedPrincipals.
-		if wa.principalMatches(sar.Spec.User, sar.Spec.Groups, webhookAuthorizer.Spec.AllowedPrincipals) {
-			if ruleIdx, matchedField := wa.matchRequestRuleWithField(webhookAuthorizer.Spec.ResourceRules, webhookAuthorizer.Spec.NonResourceRules, sar); ruleIdx >= 0 {
+		if wa.principalMatches(sar, webhookAuthorizer.Spec.AllowedPrincipals) {
+			if ruleIdx, matchedField := wa.matchRequestRuleWithField(&webhookAuthorizer, sar); ruleIdx >= 0 {
 				return evaluationResult{
 					allowed:        true,
 					reason:         fmt.Sprintf("Access granted by WebhookAuthorizer %s", webhookAuthorizer.Name),
@@ -753,19 +770,86 @@ func (wa *Authorizer) namespaceMatches(ctx context.Context, namespace string, se
 	return labelSelector.Matches(nsLabels), nil
 }
 
-// principalMatches checks if the user or groups match the principals.
-func (wa *Authorizer) principalMatches(user string, groups []string, principals []authorizationv1alpha1.Principal) bool {
-	for _, principal := range principals {
-		if principal.Namespace != "" {
-			if principal.User != "" && len(principal.Groups) == 0 && isServiceAccountInNamespace(user, principal.User, principal.Namespace) {
+// principalMatches checks whether the SubjectAccessReview subject matches any of
+// the principals.
+//
+// A principal matches when every populated matcher matches (AND across matcher
+// kinds), while multi-valued matchers such as groups and extra values match on
+// intersection (OR within a matcher). UID and extra matchers make the requester
+// attributes the apiserver uses for constrained impersonation authorization
+// (spec.uid, spec.extra) usable in authorization decisions; before this they were
+// silently ignored.
+func (wa *Authorizer) principalMatches(sar *authzv1.SubjectAccessReview, principals []authorizationv1alpha1.Principal) bool {
+	for i := range principals {
+		if principalMatchesSubject(&principals[i], sar) {
+			return true
+		}
+	}
+	return false
+}
+
+func principalMatchesSubject(principal *authorizationv1alpha1.Principal, sar *authzv1.SubjectAccessReview) bool {
+	// A principal with no populated matcher would match every request. Admission
+	// rejects that via CEL, but guard here too so a stored object written before the
+	// rule existed cannot become an accidental allow-all.
+	if principal.User == "" && len(principal.Groups) == 0 && principal.UID == "" && len(principal.Extra) == 0 {
+		return false
+	}
+
+	if principal.UID != "" && principal.UID != sar.Spec.UID {
+		return false
+	}
+	if !principalExtraMatches(principal.Extra, sar.Spec.Extra) {
+		return false
+	}
+
+	// Namespace-scoped principals only ever match ServiceAccount usernames, and
+	// combining them with group matching was never supported.
+	if principal.Namespace != "" {
+		if principal.User == "" || len(principal.Groups) > 0 {
+			return false
+		}
+		return isServiceAccountInNamespace(sar.Spec.User, principal.User, principal.Namespace)
+	}
+
+	// Identity matching is OR between user and groups, preserving the historical
+	// behaviour where either alone is sufficient.
+	if principal.User == "" && len(principal.Groups) == 0 {
+		// Only UID and/or extra matchers were set, and they already matched above.
+		return true
+	}
+	if principal.User != "" && principal.User == sar.Spec.User {
+		return true
+	}
+	return len(principal.Groups) > 0 && intersects(sar.Spec.Groups, principal.Groups)
+}
+
+// principalExtraMatches reports whether every extra matcher is satisfied by the
+// SubjectAccessReview's spec.extra map. A "*" value requires only that the key is
+// present with at least one non-empty value.
+func principalExtraMatches(matchers []authorizationv1alpha1.PrincipalExtraMatch, extra map[string]authzv1.ExtraValue) bool {
+	for i := range matchers {
+		values, ok := extra[matchers[i].Key]
+		if !ok {
+			return false
+		}
+		if !extraValueMatches(matchers[i].Values, values) {
+			return false
+		}
+	}
+	return true
+}
+
+func extraValueMatches(want []string, got authzv1.ExtraValue) bool {
+	for _, pattern := range want {
+		if pattern == rbacv1.VerbAll {
+			// Wildcard: key presence with any non-empty value is enough.
+			if slices.ContainsFunc(got, func(v string) bool { return v != "" }) {
 				return true
 			}
 			continue
 		}
-		if principal.User != "" && principal.User == user {
-			return true
-		}
-		if len(principal.Groups) > 0 && intersects(groups, principal.Groups) {
+		if slices.Contains(got, pattern) {
 			return true
 		}
 	}
@@ -783,30 +867,39 @@ func intersects(slice1, slice2 []string) bool {
 }
 
 func (wa *Authorizer) matchRequestRule(
-	resourceRules []authzv1.ResourceRule,
-	nonResourceRules []authzv1.NonResourceRule,
+	authorizer *authorizationv1alpha1.WebhookAuthorizer,
 	sar *authzv1.SubjectAccessReview,
 ) int {
-	ruleIdx, _ := wa.matchRequestRuleWithField(resourceRules, nonResourceRules, sar)
+	ruleIdx, _ := wa.matchRequestRuleWithField(authorizer, sar)
 	return ruleIdx
 }
 
 func (wa *Authorizer) matchRequestRuleWithField(
-	resourceRules []authzv1.ResourceRule,
-	nonResourceRules []authzv1.NonResourceRule,
+	authorizer *authorizationv1alpha1.WebhookAuthorizer,
 	sar *authzv1.SubjectAccessReview,
 ) (ruleIndex int, matchedField string) {
 	if sar.Spec.ResourceAttributes != nil {
-		if ruleIdx := wa.resourceRuleIndex(resourceRules, sar.Spec.ResourceAttributes); ruleIdx >= 0 {
+		verbPolicy := effectiveImpersonationVerbPolicy(authorizer)
+		if ruleIdx := wa.resourceRuleIndex(authorizer.Spec.ResourceRules, sar.Spec.ResourceAttributes, verbPolicy); ruleIdx >= 0 {
 			return ruleIdx, "resourceRule"
 		}
 	}
 	if sar.Spec.NonResourceAttributes != nil {
-		if ruleIdx := wa.nonResourceRuleIndex(nonResourceRules, sar.Spec.NonResourceAttributes); ruleIdx >= 0 {
+		if ruleIdx := wa.nonResourceRuleIndex(authorizer.Spec.NonResourceRules, sar.Spec.NonResourceAttributes); ruleIdx >= 0 {
 			return ruleIdx, "nonResourceRule"
 		}
 	}
 	return -1, ""
+}
+
+// effectiveImpersonationVerbPolicy resolves the authorizer's impersonation verb
+// policy, defaulting to the fail-safe RequireExplicitVerb for objects stored
+// before the field existed (the CRD default only applies to new writes).
+func effectiveImpersonationVerbPolicy(authorizer *authorizationv1alpha1.WebhookAuthorizer) authorizationv1alpha1.ImpersonationVerbPolicy {
+	if authorizer.Spec.ImpersonationVerbPolicy == "" {
+		return authorizationv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb
+	}
+	return authorizer.Spec.ImpersonationVerbPolicy
 }
 
 // resourceRuleIndex returns the index of the first matching resource rule, or -1.
@@ -818,7 +911,15 @@ func (wa *Authorizer) matchRequestRuleWithField(
 //
 // ResourceNames matching: when rule.ResourceNames is non-empty the request's
 // attr.Name must appear in that list. An empty ResourceNames means "all names".
-func (wa *Authorizer) resourceRuleIndex(rules []authzv1.ResourceRule, attr *authzv1.ResourceAttributes) int {
+//
+// Impersonation verbs: constrained impersonation (KEP-5284) verbs are matched
+// according to verbPolicy rather than plain RBAC wildcard semantics, so a
+// pre-existing verbs: ["*"] rule does not silently start granting impersonation.
+func (wa *Authorizer) resourceRuleIndex(
+	rules []authzv1.ResourceRule,
+	attr *authzv1.ResourceAttributes,
+	verbPolicy authorizationv1alpha1.ImpersonationVerbPolicy,
+) int {
 	// Compose the resource identifier including the subresource, if any.
 	// K8s rule convention: subresources appear as "resource/subresource" in Rules.
 	resourceKey := attr.Resource
@@ -826,7 +927,7 @@ func (wa *Authorizer) resourceRuleIndex(rules []authzv1.ResourceRule, attr *auth
 		resourceKey = attr.Resource + "/" + attr.Subresource
 	}
 	for i, rule := range rules {
-		if !matchesExactOrAll(rule.Verbs, attr.Verb) {
+		if !matchesVerb(rule.Verbs, attr.Verb, verbPolicy) {
 			continue
 		}
 		if !matchesExactOrAll(rule.APIGroups, attr.Group) {
@@ -994,6 +1095,49 @@ func (wa *Authorizer) recordRejectedMetrics(start time.Time) {
 	duration := time.Since(start).Seconds()
 	pkgmetrics.AuthorizerRequestsTotal.WithLabelValues(pkgmetrics.AuthorizerDecisionDenied, pkgmetrics.AuthorizerNameNone).Inc()
 	pkgmetrics.AuthorizerRequestDuration.WithLabelValues(pkgmetrics.AuthorizerDecisionDenied).Observe(duration)
+}
+
+// matchesVerb matches a request verb against a rule's verb list, applying the
+// authorizer's constrained-impersonation verb policy.
+//
+// For ordinary verbs this is plain RBAC matching. For `impersonate:<mode>` and
+// `impersonate-on:<mode>:<verb>` verbs:
+//
+//   - RequireExplicitVerb (default): only a literal match counts. "*" is ignored,
+//     so an existing broad rule cannot silently authorize impersonation.
+//   - AllowWildcard: plain RBAC semantics, "*" matches.
+//   - Deny: never matches for allow evaluation; the caller turns a rule hit into an
+//     explicit deny before allowed-principal evaluation runs.
+func matchesVerb(patterns []string, verb string, verbPolicy authorizationv1alpha1.ImpersonationVerbPolicy) bool {
+	if !authorizationv1alpha1.IsImpersonationVerb(verb) {
+		return matchesExactOrAll(patterns, verb)
+	}
+	switch verbPolicy {
+	case authorizationv1alpha1.ImpersonationVerbPolicyAllowWildcard:
+		return matchesExactOrAll(patterns, verb)
+	default:
+		// RequireExplicitVerb and Deny both require a literal verb match. Deny uses
+		// it to decide whether the rule applies at all.
+		return slices.Contains(patterns, verb)
+	}
+}
+
+// matchesImpersonationDeny reports whether a Deny-policy authorizer should
+// explicitly reject this request. It matches the request's rules literally on the
+// impersonation verb, ignoring the principal lists: a kill switch that only
+// applies to enumerated principals would be trivially bypassed.
+func (wa *Authorizer) matchesImpersonationDeny(
+	authorizer *authorizationv1alpha1.WebhookAuthorizer,
+	sar *authzv1.SubjectAccessReview,
+) int {
+	if effectiveImpersonationVerbPolicy(authorizer) != authorizationv1alpha1.ImpersonationVerbPolicyDeny {
+		return -1
+	}
+	if sar.Spec.ResourceAttributes == nil || !authorizationv1alpha1.IsImpersonationVerb(sar.Spec.ResourceAttributes.Verb) {
+		return -1
+	}
+	return wa.resourceRuleIndex(authorizer.Spec.ResourceRules, sar.Spec.ResourceAttributes,
+		authorizationv1alpha1.ImpersonationVerbPolicyDeny)
 }
 
 // matchesExactOrAll matches Kubernetes ResourceRule fields where only exact

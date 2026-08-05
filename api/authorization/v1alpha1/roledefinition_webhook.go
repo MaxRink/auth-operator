@@ -108,6 +108,8 @@ func (v *RoleDefinitionValidator) ValidateCreate(ctx context.Context, obj *RoleD
 		return nil, err
 	}
 
+	warnings := ConstrainedImpersonationWarnings(obj.Spec.ConstrainedImpersonation, "spec.constrainedImpersonation")
+
 	existingRD, err := v.findRoleDefinitionTargetConflict(ctx, obj)
 	if err != nil {
 		logger.Error(err, "failed to list RoleDefinitions", "targetName", obj.Spec.TargetName)
@@ -137,7 +139,7 @@ func (v *RoleDefinitionValidator) ValidateCreate(ctx context.Context, obj *RoleD
 				fmt.Sprintf("%s (already used by RestrictedRoleDefinition %q)", obj.Spec.TargetName, existingRRD.Name))})
 	}
 
-	return nil, nil
+	return warnings, nil
 }
 
 // ValidateUpdate implements admission.Validator for RoleDefinition.
@@ -183,6 +185,8 @@ func (v *RoleDefinitionValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, err
 	}
 
+	warnings := ConstrainedImpersonationWarnings(newObj.Spec.ConstrainedImpersonation, "spec.constrainedImpersonation")
+
 	existingRD, err := v.findRoleDefinitionTargetConflict(ctx, newObj)
 	if err != nil {
 		logger.Error(err, "failed to list RoleDefinitions", "targetName", newObj.Spec.TargetName)
@@ -212,7 +216,7 @@ func (v *RoleDefinitionValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 				fmt.Sprintf("%s (already used by RestrictedRoleDefinition %q)", newObj.Spec.TargetName, existingRRD.Name))})
 	}
 
-	return nil, nil
+	return warnings, nil
 }
 
 //nolint:nilnil // A nil object with nil error means no conflicting targetName was found.
@@ -342,6 +346,21 @@ func validateRoleDefinitionSpec(obj *RoleDefinition) error {
 		if err := ValidateRoleDefinitionAggregateFrom(obj); err != nil {
 			return err
 		}
+	}
+
+	// Constrained impersonation grants are appended to the generated rules, so they
+	// cannot coexist with an aggregating ClusterRole whose rules are owned by the
+	// Kubernetes aggregation controller.
+	if obj.Spec.ConstrainedImpersonation != nil && obj.Spec.AggregateFrom != nil {
+		return apierrors.NewBadRequest("constrainedImpersonation is mutually exclusive with aggregateFrom")
+	}
+	if errs := ValidateConstrainedImpersonationSpec(
+		obj.Spec.ConstrainedImpersonation,
+		obj.Spec.TargetRole == DefinitionClusterRole,
+		field.NewPath("spec", "constrainedImpersonation"),
+	); len(errs) > 0 {
+		return apierrors.NewInvalid(
+			schema.GroupKind{Group: GroupVersion.Group, Kind: "RoleDefinition"}, obj.Name, errs)
 	}
 
 	return nil
