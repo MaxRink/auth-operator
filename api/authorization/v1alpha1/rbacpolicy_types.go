@@ -5,6 +5,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -121,8 +123,12 @@ type RoleLimits struct {
 	AllowClusterRoles bool `json:"allowClusterRoles"`
 
 	// ForbiddenVerbs is a list of verbs that must not appear in generated roles.
+	// Constrained impersonation verbs may be listed here, either fully spelled out
+	// ("impersonate:user-info") or as a wildcard pattern ("impersonate:*",
+	// "impersonate-on:*"). MaxItems is 64 because each constrained impersonation
+	// mode x verb combination is a separate verb string.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MinLength=1
 	ForbiddenVerbs []string `json:"forbiddenVerbs,omitempty"`
 
@@ -147,6 +153,71 @@ type RoleLimits struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	MaxRulesPerRole *int32 `json:"maxRulesPerRole,omitempty"`
+
+	// ConstrainedImpersonation constrains Kubernetes constrained impersonation
+	// (KEP-5284) grants declared by RestrictedRoleDefinitions governed by this
+	// policy. When omitted, constrained impersonation grants are forbidden entirely
+	// (deny by default) — a RestrictedRoleDefinition that sets
+	// spec.constrainedImpersonation is reported as non-compliant.
+	// +kubebuilder:validation:Optional
+	ConstrainedImpersonation *ConstrainedImpersonationLimits `json:"constrainedImpersonation,omitempty"`
+}
+
+// ConstrainedImpersonationLimits constrains Kubernetes constrained impersonation
+// (KEP-5284) grants that RestrictedRoleDefinitions may declare.
+//
+// This complements RoleLimits.ForbiddenVerbs and
+// RoleLimits.ForbiddenResourceVerbs, which can also match generated
+// `impersonate:<mode>` / `impersonate-on:<mode>:<verb>` verbs directly. The
+// dedicated block exists because the generated verbs are synthesised by the
+// operator rather than authored by the tenant, so a verb-string denylist alone is
+// easy to bypass by choosing a different mode.
+type ConstrainedImpersonationLimits struct {
+	// Allowed enables constrained impersonation grants under this policy.
+	// Defaults to false (deny by default).
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	Allowed bool `json:"allowed"`
+
+	// AllowedModes restricts which impersonation modes may be used. An empty list
+	// with allowed=true permits every mode.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=4
+	AllowedModes []ImpersonationMode `json:"allowedModes,omitempty"`
+
+	// AllowedIdentityResources restricts which identity resources may be granted.
+	// An empty list with allowed=true permits every identity resource.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=6
+	AllowedIdentityResources []ImpersonationIdentityResource `json:"allowedIdentityResources,omitempty"`
+
+	// IdentityNameLimits constrains the identity names (resourceNames) a tenant may
+	// list in identity rules, using the same allow/deny prefix and suffix semantics
+	// as subject limits.
+	// +kubebuilder:validation:Optional
+	IdentityNameLimits *NameMatchLimits `json:"identityNameLimits,omitempty"`
+
+	// ForbiddenActionVerbs lists underlying request verbs that must not appear in
+	// action rules. Entries are the bare verbs (e.g. "delete"), not the
+	// `impersonate-on:<mode>:` encoded form.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	ForbiddenActionVerbs []string `json:"forbiddenActionVerbs,omitempty"`
+
+	// ForbidLegacyFallback requires that the RestrictedRoleDefinition also excludes
+	// the legacy bare "impersonate" verb via restrictedVerbs. This closes knob #8 of
+	// the KEP integration surface: a pre-existing blanket `impersonate` grant wins by
+	// fallback and silently defeats every constraint expressed here.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	ForbidLegacyFallback bool `json:"forbidLegacyFallback"`
+
+	// MaxIdentityNames limits how many identity names a single grant may allowlist
+	// across all identity rules. Nil means unlimited.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	MaxIdentityNames *int32 `json:"maxIdentityNames,omitempty"`
 }
 
 // NameMatchLimits defines name-based allow/deny patterns for subjects.
@@ -298,24 +369,149 @@ type DefaultPolicyAssignment struct {
 	ServiceAccounts []SARef `json:"serviceAccounts,omitempty"`
 }
 
-// ImpersonationConfig controls apply-time ServiceAccount impersonation for
+// ImpersonationExtra is a single Impersonate-Extra-<key> entry used for
+// apply-time impersonation.
+type ImpersonationExtra struct {
+	// Key is the extra key. It must be a lowercase, domain-prefixed path, matching
+	// the apiserver's constrained-impersonation validateExtra() rules.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Key string `json:"key"`
+
+	// Values are the extra values for Key. At least one non-empty value is required;
+	// the apiserver denies empty value lists and empty-string values.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	Values []string `json:"values"`
+}
+
+// ImpersonationConfig controls apply-time impersonation for
 // RestrictedBindDefinition and RestrictedRoleDefinition reconciliation.
 // RBACPolicy write access is a cluster trust boundary: a policy author can choose
-// any ServiceAccount identity here, and admission only validates that the reference
-// fields are non-empty. The impersonated ServiceAccount's own Kubernetes RBAC is
-// the authoritative permission check during apply operations.
+// any identity here, and admission only validates structural correctness. The
+// impersonated identity's own Kubernetes RBAC is the authoritative permission
+// check during apply operations.
+//
+// ### The header-mixing trap (KEP-5284)
+//
+// The apiserver selects the `serviceaccount` and node constrained-impersonation
+// modes only when the Impersonate-User header is the ONLY impersonation header
+// set. Sending Impersonate-Uid, Impersonate-Group or Impersonate-Extra-* alongside
+// a `system:serviceaccount:...` or `system:node:...` username silently skips those
+// modes, falls through to `user-info` (which refuses node and ServiceAccount
+// usernames) and finally to legacy impersonation. Admission therefore rejects
+// combining ServiceAccountRef with UID, Groups or Extra.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.serviceAccountRef) && ((has(self.uid) && self.uid != ”) || (has(self.groups) && size(self.groups) > 0) || (has(self.extra) && size(self.extra) > 0)))",message="serviceAccountRef is mutually exclusive with uid, groups and extra: setting any of them makes the apiserver skip the serviceaccount constrained-impersonation mode and silently fall back to legacy impersonation"
+// +kubebuilder:validation:XValidation:rule="!(has(self.userName) && has(self.serviceAccountRef))",message="userName and serviceAccountRef are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.groups) || !self.groups.exists(g, g == 'system:masters')",message="impersonating the system:masters group is not allowed"
 type ImpersonationConfig struct {
-	// Enabled enables ServiceAccount impersonation during restricted resource apply operations.
+	// Enabled enables impersonation during restricted resource apply operations.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled"`
 
-	// ServiceAccountRef is the ServiceAccount identity used for impersonated apply operations.
-	// Required when enabled is true. Only platform administrators should be allowed
-	// to configure this field because the operator does not perform a SubjectAccessReview
-	// for the referenced identity at admission time.
+	// ServiceAccountRef is the ServiceAccount identity used for impersonated apply
+	// operations, rendered as system:serviceaccount:<namespace>:<name>. Exactly one
+	// of ServiceAccountRef or UserName is required when enabled is true.
+	//
+	// Mutually exclusive with UID, Groups and Extra — see the header-mixing trap in
+	// the type documentation.
 	// +kubebuilder:validation:Optional
 	ServiceAccountRef *SARef `json:"serviceAccountRef,omitempty"`
+
+	// UserName is a raw impersonated username, used instead of ServiceAccountRef
+	// when the apply identity is not a ServiceAccount. Combined with UID, Groups and
+	// Extra this expresses the full `user-info` constrained-impersonation identity.
+	//
+	// A `system:node:<name>` username is rejected: node impersonation forces
+	// Groups=[system:nodes] and is not a meaningful apply identity for this operator.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
+	UserName string `json:"userName,omitempty"`
+
+	// UID is the impersonated UID, sent as the Impersonate-Uid header. Requires
+	// UserName and is checked by the apiserver against
+	// authentication.k8s.io/uids with the `impersonate:user-info` verb.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=253
+	UID string `json:"uid,omitempty"`
+
+	// Groups are the impersonated groups, sent as repeated Impersonate-Group
+	// headers. Requires UserName. "system:masters" is rejected because constrained
+	// impersonation hard-denies it.
+	//
+	// Note: at four or more groups the apiserver first attempts a single wildcard
+	// ("*") group authorization check before falling back to per-group checks.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	Groups []string `json:"groups,omitempty"`
+
+	// Extra are the impersonated extra values, sent as Impersonate-Extra-<key>
+	// headers. Requires UserName.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=16
+	Extra []ImpersonationExtra `json:"extra,omitempty"`
+
+	// Mode records which constrained-impersonation mode the configured identity is
+	// expected to select. It is advisory: the apiserver derives the mode from the
+	// username and header set, it cannot be chosen by the client. Admission verifies
+	// that the configured identity actually selects the declared mode, turning a
+	// silent legacy fallback into an admission error.
+	// +kubebuilder:validation:Optional
+	Mode ImpersonationMode `json:"mode,omitempty"`
+}
+
+// EffectiveUsername renders the impersonated username for the configuration, or
+// an empty string when no identity is configured.
+func (ic *ImpersonationConfig) EffectiveUsername() string {
+	if ic == nil {
+		return ""
+	}
+	if ic.ServiceAccountRef != nil && ic.ServiceAccountRef.Name != "" && ic.ServiceAccountRef.Namespace != "" {
+		return ServiceAccountUsernamePrefix + ic.ServiceAccountRef.Namespace + ":" + ic.ServiceAccountRef.Name
+	}
+	return ic.UserName
+}
+
+// SelectedMode returns the constrained-impersonation mode the apiserver will
+// actually select for this configuration, applying the same
+// only-username-is-set precondition as the apiserver.
+//
+// It returns an empty mode when the configuration would fall through to legacy
+// impersonation, which is the footgun this operator guards against.
+func (ic *ImpersonationConfig) SelectedMode() ImpersonationMode {
+	if ic == nil {
+		return ""
+	}
+	username := ic.EffectiveUsername()
+	if username == "" {
+		return ""
+	}
+	onlyUsernameSet := ic.UID == "" && len(ic.Groups) == 0 && len(ic.Extra) == 0
+
+	switch {
+	case strings.HasPrefix(username, NodeUsernamePrefix):
+		// Node impersonation requires only-username-set; otherwise the apiserver
+		// falls through to user-info, which refuses node usernames, then to legacy.
+		if !onlyUsernameSet {
+			return ""
+		}
+		return ImpersonationModeArbitraryNode
+	case strings.HasPrefix(username, ServiceAccountUsernamePrefix):
+		if !onlyUsernameSet {
+			return ""
+		}
+		return ImpersonationModeServiceAccount
+	default:
+		return ImpersonationModeUserInfo
+	}
 }
 
 // RBACPolicySpec defines the desired state of RBACPolicy.

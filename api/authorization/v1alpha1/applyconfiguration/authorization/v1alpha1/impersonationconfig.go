@@ -17,23 +17,66 @@ limitations under the License.
 
 package v1alpha1
 
+import (
+	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
+)
+
 // ImpersonationConfigApplyConfiguration represents a declarative configuration of the ImpersonationConfig type for use
 // with apply.
 //
-// ImpersonationConfig controls apply-time ServiceAccount impersonation for
+// ImpersonationConfig controls apply-time impersonation for
 // RestrictedBindDefinition and RestrictedRoleDefinition reconciliation.
 // RBACPolicy write access is a cluster trust boundary: a policy author can choose
-// any ServiceAccount identity here, and admission only validates that the reference
-// fields are non-empty. The impersonated ServiceAccount's own Kubernetes RBAC is
-// the authoritative permission check during apply operations.
+// any identity here, and admission only validates structural correctness. The
+// impersonated identity's own Kubernetes RBAC is the authoritative permission
+// check during apply operations.
+//
+// ### The header-mixing trap (KEP-5284)
+//
+// The apiserver selects the `serviceaccount` and node constrained-impersonation
+// modes only when the Impersonate-User header is the ONLY impersonation header
+// set. Sending Impersonate-Uid, Impersonate-Group or Impersonate-Extra-* alongside
+// a `system:serviceaccount:...` or `system:node:...` username silently skips those
+// modes, falls through to `user-info` (which refuses node and ServiceAccount
+// usernames) and finally to legacy impersonation. Admission therefore rejects
+// combining ServiceAccountRef with UID, Groups or Extra.
 type ImpersonationConfigApplyConfiguration struct {
-	// Enabled enables ServiceAccount impersonation during restricted resource apply operations.
+	// Enabled enables impersonation during restricted resource apply operations.
 	Enabled *bool `json:"enabled,omitempty"`
-	// ServiceAccountRef is the ServiceAccount identity used for impersonated apply operations.
-	// Required when enabled is true. Only platform administrators should be allowed
-	// to configure this field because the operator does not perform a SubjectAccessReview
-	// for the referenced identity at admission time.
+	// ServiceAccountRef is the ServiceAccount identity used for impersonated apply
+	// operations, rendered as system:serviceaccount:<namespace>:<name>. Exactly one
+	// of ServiceAccountRef or UserName is required when enabled is true.
+	//
+	// Mutually exclusive with UID, Groups and Extra — see the header-mixing trap in
+	// the type documentation.
 	ServiceAccountRef *SARefApplyConfiguration `json:"serviceAccountRef,omitempty"`
+	// UserName is a raw impersonated username, used instead of ServiceAccountRef
+	// when the apply identity is not a ServiceAccount. Combined with UID, Groups and
+	// Extra this expresses the full `user-info` constrained-impersonation identity.
+	//
+	// A `system:node:<name>` username is rejected: node impersonation forces
+	// Groups=[system:nodes] and is not a meaningful apply identity for this operator.
+	UserName *string `json:"userName,omitempty"`
+	// UID is the impersonated UID, sent as the Impersonate-Uid header. Requires
+	// UserName and is checked by the apiserver against
+	// authentication.k8s.io/uids with the `impersonate:user-info` verb.
+	UID *string `json:"uid,omitempty"`
+	// Groups are the impersonated groups, sent as repeated Impersonate-Group
+	// headers. Requires UserName. "system:masters" is rejected because constrained
+	// impersonation hard-denies it.
+	//
+	// Note: at four or more groups the apiserver first attempts a single wildcard
+	// ("*") group authorization check before falling back to per-group checks.
+	Groups []string `json:"groups,omitempty"`
+	// Extra are the impersonated extra values, sent as Impersonate-Extra-<key>
+	// headers. Requires UserName.
+	Extra []ImpersonationExtraApplyConfiguration `json:"extra,omitempty"`
+	// Mode records which constrained-impersonation mode the configured identity is
+	// expected to select. It is advisory: the apiserver derives the mode from the
+	// username and header set, it cannot be chosen by the client. Admission verifies
+	// that the configured identity actually selects the declared mode, turning a
+	// silent legacy fallback into an admission error.
+	Mode *authorizationv1alpha1.ImpersonationMode `json:"mode,omitempty"`
 }
 
 // ImpersonationConfigApplyConfiguration constructs a declarative configuration of the ImpersonationConfig type for use with
@@ -55,5 +98,52 @@ func (b *ImpersonationConfigApplyConfiguration) WithEnabled(value bool) *Imperso
 // If called multiple times, the ServiceAccountRef field is set to the value of the last call.
 func (b *ImpersonationConfigApplyConfiguration) WithServiceAccountRef(value *SARefApplyConfiguration) *ImpersonationConfigApplyConfiguration {
 	b.ServiceAccountRef = value
+	return b
+}
+
+// WithUserName sets the UserName field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UserName field is set to the value of the last call.
+func (b *ImpersonationConfigApplyConfiguration) WithUserName(value string) *ImpersonationConfigApplyConfiguration {
+	b.UserName = &value
+	return b
+}
+
+// WithUID sets the UID field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UID field is set to the value of the last call.
+func (b *ImpersonationConfigApplyConfiguration) WithUID(value string) *ImpersonationConfigApplyConfiguration {
+	b.UID = &value
+	return b
+}
+
+// WithGroups adds the given value to the Groups field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Groups field.
+func (b *ImpersonationConfigApplyConfiguration) WithGroups(values ...string) *ImpersonationConfigApplyConfiguration {
+	for i := range values {
+		b.Groups = append(b.Groups, values[i])
+	}
+	return b
+}
+
+// WithExtra adds the given value to the Extra field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Extra field.
+func (b *ImpersonationConfigApplyConfiguration) WithExtra(values ...*ImpersonationExtraApplyConfiguration) *ImpersonationConfigApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithExtra")
+		}
+		b.Extra = append(b.Extra, *values[i])
+	}
+	return b
+}
+
+// WithMode sets the Mode field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Mode field is set to the value of the last call.
+func (b *ImpersonationConfigApplyConfiguration) WithMode(value authorizationv1alpha1.ImpersonationMode) *ImpersonationConfigApplyConfiguration {
+	b.Mode = &value
 	return b
 }

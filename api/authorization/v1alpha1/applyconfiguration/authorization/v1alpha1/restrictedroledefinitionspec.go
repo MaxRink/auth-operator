@@ -57,7 +57,23 @@ type RestrictedRoleDefinitionSpecApplyConfiguration struct {
 	// RestrictedResources holds resources which will NOT be included in the generated role.
 	RestrictedResources []v1.APIResource `json:"restrictedResources,omitempty"`
 	// RestrictedVerbs holds verbs which will NOT be included in the generated role.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	RestrictedVerbs []string `json:"restrictedVerbs,omitempty"`
+	// ConstrainedImpersonation declares a Kubernetes constrained impersonation
+	// (KEP-5284) grant using a typed API instead of hand-written magic verb strings.
+	// The controller appends the generated PolicyRules to the discovery-derived rules
+	// of the generated role.
+	//
+	// Unlike RoleDefinition, the grant is additionally checked against the governing
+	// RBACPolicy: roleLimits.forbiddenVerbs and roleLimits.forbiddenResourceVerbs can
+	// forbid `impersonate:*`-style grants, and
+	// roleLimits.constrainedImpersonation can restrict the allowed modes, identity
+	// resources and identity names.
+	ConstrainedImpersonation *ConstrainedImpersonationSpecApplyConfiguration `json:"constrainedImpersonation,omitempty"`
 }
 
 // RestrictedRoleDefinitionSpecApplyConfiguration constructs a declarative configuration of the RestrictedRoleDefinitionSpec type for use with
@@ -136,5 +152,13 @@ func (b *RestrictedRoleDefinitionSpecApplyConfiguration) WithRestrictedVerbs(val
 	for i := range values {
 		b.RestrictedVerbs = append(b.RestrictedVerbs, values[i])
 	}
+	return b
+}
+
+// WithConstrainedImpersonation sets the ConstrainedImpersonation field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ConstrainedImpersonation field is set to the value of the last call.
+func (b *RestrictedRoleDefinitionSpecApplyConfiguration) WithConstrainedImpersonation(value *ConstrainedImpersonationSpecApplyConfiguration) *RestrictedRoleDefinitionSpecApplyConfiguration {
+	b.ConstrainedImpersonation = value
 	return b
 }

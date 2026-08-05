@@ -18,6 +18,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	v1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
@@ -38,6 +39,15 @@ type WebhookAuthorizerSpecApplyConfiguration struct {
 	DeniedPrincipals []PrincipalApplyConfiguration `json:"deniedPrincipals,omitempty"`
 	// NamespaceSelector is a label selector to match namespaces that should allow the specified API calls.
 	NamespaceSelector *metav1.LabelSelectorApplyConfiguration `json:"namespaceSelector,omitempty"`
+	// ImpersonationVerbPolicy controls how this authorizer treats Kubernetes
+	// constrained impersonation (KEP-5284) verbs — `impersonate:<mode>` and
+	// `impersonate-on:<mode>:<verb>` — in resourceRules[].verbs.
+	//
+	// Defaults to "RequireExplicitVerb", which is a deliberate hardening: a
+	// pre-existing rule with verbs: ["*"] would otherwise silently start granting
+	// constrained impersonation the moment the feature gate is on. See the
+	// ImpersonationVerbPolicy type documentation for the full rationale.
+	ImpersonationVerbPolicy *authorizationv1alpha1.ImpersonationVerbPolicy `json:"impersonationVerbPolicy,omitempty"`
 }
 
 // WebhookAuthorizerSpecApplyConfiguration constructs a declarative configuration of the WebhookAuthorizerSpec type for use with
@@ -97,5 +107,13 @@ func (b *WebhookAuthorizerSpecApplyConfiguration) WithDeniedPrincipals(values ..
 // If called multiple times, the NamespaceSelector field is set to the value of the last call.
 func (b *WebhookAuthorizerSpecApplyConfiguration) WithNamespaceSelector(value *metav1.LabelSelectorApplyConfiguration) *WebhookAuthorizerSpecApplyConfiguration {
 	b.NamespaceSelector = value
+	return b
+}
+
+// WithImpersonationVerbPolicy sets the ImpersonationVerbPolicy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ImpersonationVerbPolicy field is set to the value of the last call.
+func (b *WebhookAuthorizerSpecApplyConfiguration) WithImpersonationVerbPolicy(value authorizationv1alpha1.ImpersonationVerbPolicy) *WebhookAuthorizerSpecApplyConfiguration {
+	b.ImpersonationVerbPolicy = &value
 	return b
 }

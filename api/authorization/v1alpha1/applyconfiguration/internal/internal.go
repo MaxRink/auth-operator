@@ -139,6 +139,59 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             scalar: string
           elementRelationship: atomic
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ConstrainedImpersonationLimits
+  map:
+    fields:
+    - name: allowed
+      type:
+        scalar: boolean
+      default: false
+    - name: allowedIdentityResources
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationIdentityResource
+          elementRelationship: atomic
+    - name: allowedModes
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationMode
+          elementRelationship: atomic
+    - name: forbidLegacyFallback
+      type:
+        scalar: boolean
+      default: false
+    - name: forbiddenActionVerbs
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: identityNameLimits
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.NameMatchLimits
+    - name: maxIdentityNames
+      type:
+        scalar: numeric
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ConstrainedImpersonationSpec
+  map:
+    fields:
+    - name: actions
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationActionRule
+          elementRelationship: atomic
+    - name: identities
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationIdentityRule
+          elementRelationship: atomic
+    - name: mode
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationMode
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.DefaultPolicyAssignment
   map:
     fields:
@@ -154,6 +207,33 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.SARef
           elementRelationship: atomic
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationActionRule
+  map:
+    fields:
+    - name: apiGroups
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: resourceNames
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: resources
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: verbs
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationConfig
   map:
     fields:
@@ -161,9 +241,63 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: boolean
       default: false
+    - name: extra
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationExtra
+          elementRelationship: atomic
+    - name: groups
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: mode
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationMode
     - name: serviceAccountRef
       type:
         namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.SARef
+    - name: uid
+      type:
+        scalar: string
+    - name: userName
+      type:
+        scalar: string
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationExtra
+  map:
+    fields:
+    - name: key
+      type:
+        scalar: string
+    - name: values
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationIdentityResource
+  scalar: string
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationIdentityRule
+  map:
+    fields:
+    - name: extraKey
+      type:
+        scalar: string
+    - name: names
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: resource
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationIdentityResource
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationMode
+  scalar: string
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationVerbPolicy
+  scalar: string
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.NameMatchLimits
   map:
     fields:
@@ -263,6 +397,12 @@ var schemaYAML = typed.YAMLObject(`types:
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.Principal
   map:
     fields:
+    - name: extra
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.PrincipalExtraMatch
+          elementRelationship: atomic
     - name: groups
       type:
         list:
@@ -272,9 +412,24 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: namespace
       type:
         scalar: string
+    - name: uid
+      type:
+        scalar: string
     - name: user
       type:
         scalar: string
+- name: com.github.telekom.auth-operator.api.authorization.v1alpha1.PrincipalExtraMatch
+  map:
+    fields:
+    - name: key
+      type:
+        scalar: string
+    - name: values
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.RBACPolicy
   map:
     fields:
@@ -480,6 +635,9 @@ var schemaYAML = typed.YAMLObject(`types:
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.RestrictedRoleDefinitionSpec
   map:
     fields:
+    - name: constrainedImpersonation
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ConstrainedImpersonationSpec
     - name: policyRef
       type:
         namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.RBACPolicyReference
@@ -567,6 +725,9 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: boolean
       default: false
+    - name: constrainedImpersonation
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ConstrainedImpersonationSpec
     - name: metricsAccessAllowed
       type:
         scalar: boolean
@@ -623,6 +784,9 @@ var schemaYAML = typed.YAMLObject(`types:
       type:
         scalar: boolean
       default: false
+    - name: constrainedImpersonation
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ConstrainedImpersonationLimits
     - name: forbiddenAPIGroups
       type:
         list:
@@ -781,6 +945,10 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.Principal
           elementRelationship: atomic
+    - name: impersonationVerbPolicy
+      type:
+        namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ImpersonationVerbPolicy
+      default: RequireExplicitVerb
     - name: namespaceSelector
       type:
         namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector

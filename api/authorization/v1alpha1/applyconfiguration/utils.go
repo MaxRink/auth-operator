@@ -41,10 +41,20 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &authorizationv1alpha1.BindingLimitsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterBinding"):
 		return &authorizationv1alpha1.ClusterBindingApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ConstrainedImpersonationLimits"):
+		return &authorizationv1alpha1.ConstrainedImpersonationLimitsApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ConstrainedImpersonationSpec"):
+		return &authorizationv1alpha1.ConstrainedImpersonationSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("DefaultPolicyAssignment"):
 		return &authorizationv1alpha1.DefaultPolicyAssignmentApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ImpersonationActionRule"):
+		return &authorizationv1alpha1.ImpersonationActionRuleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ImpersonationConfig"):
 		return &authorizationv1alpha1.ImpersonationConfigApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ImpersonationExtra"):
+		return &authorizationv1alpha1.ImpersonationExtraApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ImpersonationIdentityRule"):
+		return &authorizationv1alpha1.ImpersonationIdentityRuleApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NameMatchLimits"):
 		return &authorizationv1alpha1.NameMatchLimitsApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("NamespaceBinding"):
@@ -55,6 +65,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &authorizationv1alpha1.PolicyScopeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("Principal"):
 		return &authorizationv1alpha1.PrincipalApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("PrincipalExtraMatch"):
+		return &authorizationv1alpha1.PrincipalExtraMatchApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("RBACPolicy"):
 		return &authorizationv1alpha1.RBACPolicyApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("RBACPolicyReference"):

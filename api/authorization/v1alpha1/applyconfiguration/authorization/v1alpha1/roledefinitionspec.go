@@ -58,6 +58,11 @@ type RoleDefinitionSpecApplyConfiguration struct {
 	// RestrictedVerbs holds all verbs which will *NOT* be reconciled into the "TargetRole".
 	// The RBAC operator discovers all resource verbs available and removes those listed here.
 	// A value of "*" restricts all discovered verbs.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	RestrictedVerbs []string `json:"restrictedVerbs,omitempty"`
 	// BreakglassAllowed marks generated ClusterRoles as eligible for temporary
 	// privilege escalation via k8s-breakglass. The generated ClusterRole always
@@ -83,6 +88,20 @@ type RoleDefinitionSpecApplyConfiguration struct {
 	// Mutually exclusive with RestrictedAPIs, RestrictedResources, and RestrictedVerbs.
 	// Only applicable when targetRole is ClusterRole.
 	AggregateFrom *rbacv1.AggregationRule `json:"aggregateFrom,omitempty"`
+	// ConstrainedImpersonation declares a Kubernetes constrained impersonation
+	// (KEP-5284) grant using a typed API instead of hand-written magic verb
+	// strings. The controller appends the generated PolicyRules — identity rules in
+	// the authentication.k8s.io API group with `impersonate:<mode>` verbs, and
+	// action rules with `impersonate-on:<mode>:<verb>` verbs — to the discovery
+	// derived rules of the target role.
+	//
+	// The feature requires the ConstrainedImpersonation kube-apiserver feature gate
+	// (alpha 1.35 off-by-default, beta 1.36 on-by-default). On an older apiserver
+	// the generated grants are simply never matched, so the change fails safe.
+	//
+	// Mutually exclusive with AggregateFrom, whose rules are owned by the
+	// Kubernetes aggregation controller.
+	ConstrainedImpersonation *ConstrainedImpersonationSpecApplyConfiguration `json:"constrainedImpersonation,omitempty"`
 }
 
 // RoleDefinitionSpecApplyConfiguration constructs a declarative configuration of the RoleDefinitionSpec type for use with
@@ -191,5 +210,13 @@ func (b *RoleDefinitionSpecApplyConfiguration) WithAggregationLabels(entries map
 // If called multiple times, the AggregateFrom field is set to the value of the last call.
 func (b *RoleDefinitionSpecApplyConfiguration) WithAggregateFrom(value rbacv1.AggregationRule) *RoleDefinitionSpecApplyConfiguration {
 	b.AggregateFrom = &value
+	return b
+}
+
+// WithConstrainedImpersonation sets the ConstrainedImpersonation field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ConstrainedImpersonation field is set to the value of the last call.
+func (b *RoleDefinitionSpecApplyConfiguration) WithConstrainedImpersonation(value *ConstrainedImpersonationSpecApplyConfiguration) *RoleDefinitionSpecApplyConfiguration {
+	b.ConstrainedImpersonation = value
 	return b
 }

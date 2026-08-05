@@ -40,6 +40,11 @@ type RestrictedAPIGroupApplyConfiguration struct {
 	// in this group — remaining verbs are still allowed.
 	// This enables per-API-group read-only restrictions without enumerating every resource.
 	// A verb value of "*" restricts all discovered verbs in this API group.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	Verbs []string `json:"verbs,omitempty"`
 }
 
