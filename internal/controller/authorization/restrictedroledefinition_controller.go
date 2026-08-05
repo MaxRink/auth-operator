@@ -36,6 +36,7 @@ import (
 
 	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	"github.com/telekom/auth-operator/api/authorization/v1alpha1/applyconfiguration/ssa"
+	"github.com/telekom/auth-operator/pkg/capabilities"
 	conditions "github.com/telekom/auth-operator/pkg/conditions"
 	"github.com/telekom/auth-operator/pkg/discovery"
 	"github.com/telekom/auth-operator/pkg/helpers"
@@ -71,6 +72,16 @@ type RestrictedRoleDefinitionReconciler struct {
 	restConfig                *rest.Config
 	impersonatedClientFactory impersonatedClientFactory
 	impersonatedClientCache   *impersonatedClientCache
+
+	// capabilityDetector probes the API server for constrained impersonation
+	// support so an inert grant is surfaced rather than silently reported as
+	// reconciled. Optional: when nil the condition is set to Unknown.
+	capabilityDetector capabilityDetector
+}
+
+// setCapabilityDetector implements capabilityDetectorSetter.
+func (r *RestrictedRoleDefinitionReconciler) setCapabilityDetector(d capabilityDetector) {
+	r.capabilityDetector = d
 }
 
 // setTracer implements tracerSetter.
@@ -409,6 +420,19 @@ func (r *RestrictedRoleDefinitionReconciler) Reconcile(ctx context.Context, req 
 		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerRestrictedRoleDefinition, metrics.ResultRequeue).Inc()
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+
+	// Step 7.4: Append the typed constrained-impersonation grant, if any. This runs
+	// after policy evaluation so a non-compliant grant never reaches the cluster, and
+	// before the MaxRulesPerRole check so generated impersonation rules count towards
+	// the policy's rule budget.
+	finalRules, err = appendConstrainedImpersonationRules(rrd.Spec.ConstrainedImpersonation, finalRules)
+	if err != nil {
+		r.rrdMarkStalled(ctx, rrd, err)
+		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerRestrictedRoleDefinition, metrics.ResultError).Inc()
+		metrics.ReconcileErrors.WithLabelValues(metrics.ControllerRestrictedRoleDefinition, metrics.ErrorTypeValidation).Inc()
+		return ctrl.Result{}, err
+	}
+	r.rrdRecordConstrainedImpersonationState(ctx, rrd)
 
 	// Step 7.5: Check MaxRulesPerRole (requires generated rule count).
 	if v := policy.CheckMaxRulesPerRole(rbacPolicy.Spec.RoleLimits, len(finalRules)); v != nil {
@@ -929,4 +953,27 @@ func (r *RestrictedRoleDefinitionReconciler) rrdLogApplyIdentity(
 	logger := log.FromContext(ctx)
 	trace.SpanFromContext(ctx).SetAttributes(tracing.AttrUser.String(impersonatedUser))
 	logger.V(2).Info("using impersonated apply identity", "name", resourceName, "impersonatedUser", impersonatedUser, "policy", policyName)
+}
+
+// rrdRecordConstrainedImpersonationState sets the
+// ConstrainedImpersonationEffective condition and emits a Warning event when the
+// generated grant would be inert on this API server.
+func (r *RestrictedRoleDefinitionReconciler) rrdRecordConstrainedImpersonationState(
+	ctx context.Context,
+	rrd *authorizationv1alpha1.RestrictedRoleDefinition,
+) {
+	result := setConstrainedImpersonationCondition(
+		ctx,
+		rrd,
+		rrd.Generation,
+		rrd.Spec.ConstrainedImpersonation,
+		rrd.Spec.RestrictedVerbs,
+		r.capabilityDetector,
+	)
+	if rrd.Spec.ConstrainedImpersonation == nil || result.State == capabilities.StateEnabled {
+		return
+	}
+	r.recorder.Eventf(rrd, nil, corev1.EventTypeWarning,
+		authorizationv1alpha1.EventReasonCreation, authorizationv1alpha1.EventActionReconcile,
+		"Constrained impersonation grant may not be effective: %s", result.Detail)
 }

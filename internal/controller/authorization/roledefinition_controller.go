@@ -51,6 +51,12 @@ import (
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="coordination.k8s.io",resources=leases,verbs=get;list;update;create;delete
 // +kubebuilder:rbac:groups="events.k8s.io",resources=events,verbs=create;patch;update
+// Read the API server's own /metrics endpoint to detect whether the
+// ConstrainedImpersonation (KEP-5284) feature gate is enabled, via the
+// kubernetes_feature_enabled gauge. This is read-only and non-sensitive; without
+// it the operator falls back to a server-version comparison and reports the
+// capability as Unknown when even that is unavailable.
+// +kubebuilder:rbac:urls=/metrics,verbs=get
 
 // queueAllTimeout is the maximum time spent listing all resources when
 // re-queuing reconciliations after a tracker event (e.g. CRD discovery change).
@@ -65,6 +71,16 @@ type RoleDefinitionReconciler struct {
 	resourceTracker *discovery.ResourceTracker
 	trackerEvents   chan event.TypedGenericEvent[client.Object]
 	tracer          trace.Tracer
+
+	// capabilityDetector probes the API server for constrained impersonation
+	// support so an inert grant is surfaced rather than silently reported as
+	// reconciled. Optional: when nil the condition is set to Unknown.
+	capabilityDetector capabilityDetector
+}
+
+// setCapabilityDetector implements capabilityDetectorSetter.
+func (r *RoleDefinitionReconciler) setCapabilityDetector(d capabilityDetector) {
+	r.capabilityDetector = d
 }
 
 type apiResourceAccess struct {
@@ -322,6 +338,19 @@ func (r *RoleDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			"roleDefinition", roleDefinition.Name,
 			"ruleCount", len(finalRules))
 	}
+
+	// Step 4.5: Append the typed constrained-impersonation grant, if any. This is a
+	// no-op when spec.constrainedImpersonation is unset, so pre-existing
+	// RoleDefinitions produce byte-identical rules.
+	finalRules, err = appendConstrainedImpersonationRules(roleDefinition.Spec.ConstrainedImpersonation, finalRules)
+	if err != nil {
+		logger.Error(err, "Failed to build constrained impersonation rules", "roleDefinition", roleDefinition.Name)
+		r.markStalled(ctx, roleDefinition, err)
+		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerRoleDefinition, metrics.ResultError).Inc()
+		metrics.ReconcileErrors.WithLabelValues(metrics.ControllerRoleDefinition, metrics.ErrorTypeValidation).Inc()
+		return ctrl.Result{}, err
+	}
+	r.recordConstrainedImpersonationState(ctx, roleDefinition)
 
 	// Step 5: Ensure the target role exists with computed rules (or aggregation rule)
 	logger.V(2).Info("Ensuring role",
