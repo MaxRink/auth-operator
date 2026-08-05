@@ -15,9 +15,16 @@ import (
 )
 
 // RESTMetricsFetcher reads the API server's /metrics endpoint over an existing
-// REST config. The operator already has get access to /metrics via its
-// non-resource URL grant, so no new RBAC is needed for the common case; when the
-// grant is missing, the fetch fails and detection degrades to StateUnknown.
+// REST config.
+//
+// This requires a nonResourceURLs: ["/metrics"], verbs: ["get"] grant on the
+// operator's ClusterRole. That grant is added by this feature and is gated behind
+// the Helm value controller.constrainedImpersonation.capabilityDetection (default
+// true); setting it to false omits the rule entirely.
+//
+// When the grant is absent the fetch fails with a 403 and detection does not fail
+// the reconcile: the Detector falls back to comparing the API server version, and
+// degrades to StateUnknown only when even that is unavailable.
 type RESTMetricsFetcher struct {
 	client rest.Interface
 }
