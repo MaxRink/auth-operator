@@ -590,8 +590,8 @@ spec:
                     and extra: setting any of them makes the apiserver skip the serviceaccount
                     constrained-impersonation mode and silently fall back to legacy
                     impersonation'
-                  rule: '!(has(self.serviceAccountRef) && ((has(self.uid) && self.uid
-                    != '''') || (has(self.groups) && size(self.groups) > 0) || (has(self.extra)
+                  rule: '!(has(self.serviceAccountRef) && ((has(self.uid) && size(self.uid)
+                    > 0) || (has(self.groups) && size(self.groups) > 0) || (has(self.extra)
                     && size(self.extra) > 0)))'
                 - message: userName and serviceAccountRef are mutually exclusive
                   rule: '!(has(self.userName) && has(self.serviceAccountRef))'

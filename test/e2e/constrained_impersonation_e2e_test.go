@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -69,24 +70,109 @@ var _ = Describe("Constrained Impersonation (KEP-5284)", Ordered, Label("constra
 	// exactly the compatibility matrix the feature has to satisfy.
 	gateEnabled := os.Getenv("E2E_CONSTRAINED_IMPERSONATION") != "disabled"
 
-	// impersonatorUsername is the full Kubernetes username of the impersonating SA.
-	impersonatorUsername := fmt.Sprintf("system:serviceaccount:%s:%s", ciNamespace, impersonatorSA)
+	// impersonatorKubeconfig is a dedicated kubeconfig whose ONLY credential is the
+	// impersonator ServiceAccount's bearer token. It is built in BeforeAll and is
+	// what makes these assertions meaningful.
+	var impersonatorKubeconfig string
 
-	// canI asks the apiserver whether impersonatorUsername, while impersonating
-	// impersonatedUser, may perform verb on resource. SelfSubjectAccessReview via
-	// `kubectl auth can-i` with a double --as chain is the closest thing to the real
-	// request that kubectl can express, and it exercises the same authorizer path.
+	// canI reports whether the impersonator, while impersonating impersonatedUser,
+	// may actually perform verb on resource. It issues a REAL request rather than a
+	// SubjectAccessReview.
+	//
+	// Three traps make it easy to write an assertion here that silently proves
+	// nothing, and all three were hit while developing this suite:
+	//
+	//  1. kubectl's --as is a plain string flag, so `--as A --as B` does NOT chain.
+	//     The second value overwrites the first, leaving the test's own identity
+	//     impersonating only B.
+	//  2. Passing --token alongside a kubeconfig that carries a client certificate
+	//     does not switch identity either: the client cert wins, so the request is
+	//     still authenticated as the kubeconfig's (admin) user. Hence the dedicated
+	//     token-only kubeconfig, whose identity is verified when it is built.
+	//  3. `kubectl auth can-i --as X` does not probe the verb you name. It CREATEs a
+	//     selfsubjectaccessreviews resource while impersonating, so under constrained
+	//     impersonation the apiserver looks for
+	//     impersonate-on:user-info:create on selfsubjectaccessreviews --
+	//     NOT impersonate-on:user-info:list on configmaps. An SSAR-based probe
+	//     therefore answers a different question than the grant expresses.
+	//
+	// Issuing the real request is the only way to exercise the intended action rule.
 	canI := func(impersonatedUser, verb, resource, namespace string) (bool, string) {
-		args := []string{
-			"auth", "can-i", verb, resource,
-			"-n", namespace,
-			"--as", impersonatorUsername,
-			"--as", impersonatedUser,
+		args := make([]string, 0, 6)
+		switch verb {
+		case "list":
+			args = append(args, "get", resource)
+		case "get":
+			// Read a resource that always exists in a fresh namespace.
+			args = append(args, "get", resource, "kube-root-ca.crt")
+		case "delete":
+			args = append(args, "delete", resource, "kube-root-ca.crt", "--dry-run=server")
+		default:
+			args = append(args, verb, resource)
 		}
+		args = append(args,
+			"-n", namespace,
+			"--kubeconfig", impersonatorKubeconfig,
+			"--as", impersonatedUser,
+		)
 		cmd := utils.CommandContext(context.Background(), "kubectl", args...)
 		out, err := utils.Run(cmd)
 		text := strings.TrimSpace(string(out))
-		return err == nil && strings.HasPrefix(text, "yes"), text
+		// A forbidden request exits non-zero with a "forbidden"/"cannot" message; any
+		// other error (e.g. a genuine connectivity failure) also counts as not
+		// allowed, and the returned text is surfaced by the callers for diagnosis.
+		return err == nil, text
+	}
+
+	// buildImpersonatorKubeconfig writes a kubeconfig that authenticates purely as
+	// the impersonator ServiceAccount: same cluster and CA as the test's own
+	// kubeconfig, but a fresh user entry holding only the SA token, with no client
+	// certificate that could take precedence.
+	buildImpersonatorKubeconfig := func() (string, error) {
+		run := func(args ...string) (string, error) {
+			out, err := utils.Run(utils.CommandContext(context.Background(), "kubectl", args...))
+			return strings.TrimSpace(string(out)), err
+		}
+
+		token, err := run("create", "token", impersonatorSA, "-n", ciNamespace, "--duration", "60m")
+		if err != nil {
+			return "", fmt.Errorf("mint impersonator token: %w", err)
+		}
+
+		path := filepath.Join(os.TempDir(), fmt.Sprintf("ao-e2e-impersonator-%d.kubeconfig", os.Getpid()))
+		// Start from a flattened copy of the current context so the server address
+		// and CA bundle are correct, then replace the credential outright.
+		raw, err := run("config", "view", "--minify", "--raw", "--flatten", "-o", "yaml")
+		if err != nil {
+			return "", fmt.Errorf("export kubeconfig: %w", err)
+		}
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			return "", fmt.Errorf("write kubeconfig: %w", err)
+		}
+
+		const saUser = "e2e-impersonator-sa"
+		if _, err := run("--kubeconfig", path, "config", "set-credentials", saUser, "--token", token); err != nil {
+			return "", fmt.Errorf("set impersonator credentials: %w", err)
+		}
+		ctxName, err := run("--kubeconfig", path, "config", "current-context")
+		if err != nil {
+			return "", fmt.Errorf("read current context: %w", err)
+		}
+		if _, err := run("--kubeconfig", path, "config", "set-context", ctxName, "--user", saUser); err != nil {
+			return "", fmt.Errorf("point context at impersonator user: %w", err)
+		}
+
+		// Verify the identity actually switched. Without this the whole suite can
+		// silently degrade to asserting cluster-admin's permissions.
+		who, err := run("--kubeconfig", path, "auth", "whoami", "-o", "jsonpath={.status.userInfo.username}")
+		if err != nil {
+			return "", fmt.Errorf("verify impersonator identity: %w", err)
+		}
+		want := fmt.Sprintf("system:serviceaccount:%s:%s", ciNamespace, impersonatorSA)
+		if who != want {
+			return "", fmt.Errorf("kubeconfig authenticates as %q, want %q", who, want)
+		}
+		return path, nil
 	}
 
 	// applyManifest applies a YAML document from a string.
@@ -170,6 +256,19 @@ metadata:
   name: %s
   namespace: %s
 `, impersonatorSA, ciNamespace))).To(Succeed())
+
+		By("Building a kubeconfig that authenticates as the impersonator ServiceAccount")
+		// The impersonator must authenticate as itself for the impersonation
+		// assertions to mean anything; see the canI comment.
+		Eventually(func() error {
+			path, err := buildImpersonatorKubeconfig()
+			if err != nil {
+				return err
+			}
+			impersonatorKubeconfig = path
+			return nil
+		}, ciReconcileTimeout, ciPollInterval).Should(Succeed())
+		Expect(impersonatorKubeconfig).NotTo(BeEmpty())
 	})
 
 	AfterAll(func() {

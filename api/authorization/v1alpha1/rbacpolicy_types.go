@@ -406,7 +406,7 @@ type ImpersonationExtra struct {
 // usernames) and finally to legacy impersonation. Admission therefore rejects
 // combining ServiceAccountRef with UID, Groups or Extra.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.serviceAccountRef) && ((has(self.uid) && self.uid != ”) || (has(self.groups) && size(self.groups) > 0) || (has(self.extra) && size(self.extra) > 0)))",message="serviceAccountRef is mutually exclusive with uid, groups and extra: setting any of them makes the apiserver skip the serviceaccount constrained-impersonation mode and silently fall back to legacy impersonation"
+// +kubebuilder:validation:XValidation:rule="!(has(self.serviceAccountRef) && ((has(self.uid) && size(self.uid) > 0) || (has(self.groups) && size(self.groups) > 0) || (has(self.extra) && size(self.extra) > 0)))",message="serviceAccountRef is mutually exclusive with uid, groups and extra: setting any of them makes the apiserver skip the serviceaccount constrained-impersonation mode and silently fall back to legacy impersonation"
 // +kubebuilder:validation:XValidation:rule="!(has(self.userName) && has(self.serviceAccountRef))",message="userName and serviceAccountRef are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.groups) || !self.groups.exists(g, g == 'system:masters')",message="impersonating the system:masters group is not allowed"
 type ImpersonationConfig struct {
