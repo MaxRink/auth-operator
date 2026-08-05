@@ -210,6 +210,18 @@
             }
           }
         },
+        "constrainedImpersonation": {
+          "type": "object",
+          "description": "Kubernetes constrained impersonation (KEP-5284) support. The feature is gated behind the ConstrainedImpersonation kube-apiserver feature gate: absent before Kubernetes 1.35, alpha and off by default in 1.35, beta and on by default from 1.36.",
+          "additionalProperties": false,
+          "properties": {
+            "capabilityDetection": {
+              "type": "boolean",
+              "description": "Grant the controller read access to the API server /metrics endpoint so it can read the kubernetes_feature_enabled gauge and detect whether the ConstrainedImpersonation feature gate is enabled. Read-only. When disabled, the operator falls back to a server-version comparison and reports the capability as Unknown if that is also unavailable; reconciliation still succeeds either way.",
+              "default": true
+            }
+          }
+        },
         "tracker": {
           "type": "object",
           "description": "ResourceTracker interval configuration.",

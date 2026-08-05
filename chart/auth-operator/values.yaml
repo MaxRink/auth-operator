@@ -66,6 +66,25 @@ controller:
     serviceAccounts: []
     # - namespace: team-a
     #   name: team-a-rbac-applier
+  # Kubernetes constrained impersonation (KEP-5284) support.
+  #
+  # The feature is gated behind the ConstrainedImpersonation kube-apiserver feature
+  # gate: absent before Kubernetes 1.35, alpha and off by default in 1.35, beta and
+  # on by default from 1.36. The operator never assumes the gate is on.
+  #
+  # A ClusterRole containing impersonate:<mode> verbs is accepted by every API
+  # server version but is INERT (grants nothing) when the gate is off. Capability
+  # detection turns that silent-no-privilege failure into a visible
+  # ConstrainedImpersonationEffective condition and a Warning event.
+  constrainedImpersonation:
+    # Grant the controller read access to the API server's /metrics endpoint so it
+    # can read the kubernetes_feature_enabled gauge and detect the gate's effective
+    # state. This is the only new RBAC the feature requires and it is read-only.
+    #
+    # Set to false in clusters where /metrics access is restricted. The operator
+    # then falls back to a server-version comparison, and reports the capability as
+    # Unknown when even that is unavailable — reconciliation still succeeds either way.
+    capabilityDetection: true
   # ResourceTracker interval configuration
   tracker:
     # Interval between periodic API resource collections.

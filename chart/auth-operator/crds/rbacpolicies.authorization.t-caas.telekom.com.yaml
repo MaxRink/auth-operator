@@ -486,15 +486,77 @@ spec:
                 properties:
                   enabled:
                     default: false
-                    description: Enabled enables ServiceAccount impersonation during
-                      restricted resource apply operations.
+                    description: Enabled enables impersonation during restricted resource
+                      apply operations.
                     type: boolean
+                  extra:
+                    description: |-
+                      Extra are the impersonated extra values, sent as Impersonate-Extra-<key>
+                      headers. Requires UserName.
+                    items:
+                      description: |-
+                        ImpersonationExtra is a single Impersonate-Extra-<key> entry used for
+                        apply-time impersonation.
+                      properties:
+                        key:
+                          description: |-
+                            Key is the extra key. It must be a lowercase, domain-prefixed path, matching
+                            the apiserver's constrained-impersonation validateExtra() rules.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        values:
+                          description: |-
+                            Values are the extra values for Key. At least one non-empty value is required;
+                            the apiserver denies empty value lists and empty-string values.
+                          items:
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          maxItems: 32
+                          minItems: 1
+                          type: array
+                      required:
+                      - key
+                      - values
+                      type: object
+                    maxItems: 16
+                    type: array
+                  groups:
+                    description: |-
+                      Groups are the impersonated groups, sent as repeated Impersonate-Group
+                      headers. Requires UserName. "system:masters" is rejected because constrained
+                      impersonation hard-denies it.
+
+                      Note: at four or more groups the apiserver first attempts a single wildcard
+                      ("*") group authorization check before falling back to per-group checks.
+                    items:
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    maxItems: 32
+                    type: array
+                  mode:
+                    description: |-
+                      Mode records which constrained-impersonation mode the configured identity is
+                      expected to select. It is advisory: the apiserver derives the mode from the
+                      username and header set, it cannot be chosen by the client. Admission verifies
+                      that the configured identity actually selects the declared mode, turning a
+                      silent legacy fallback into an admission error.
+                    enum:
+                    - user-info
+                    - serviceaccount
+                    - arbitrary-node
+                    - associated-node
+                    type: string
                   serviceAccountRef:
                     description: |-
-                      ServiceAccountRef is the ServiceAccount identity used for impersonated apply operations.
-                      Required when enabled is true. Only platform administrators should be allowed
-                      to configure this field because the operator does not perform a SubjectAccessReview
-                      for the referenced identity at admission time.
+                      ServiceAccountRef is the ServiceAccount identity used for impersonated apply
+                      operations, rendered as system:serviceaccount:<namespace>:<name>. Exactly one
+                      of ServiceAccountRef or UserName is required when enabled is true.
+
+                      Mutually exclusive with UID, Groups and Extra — see the header-mixing trap in
+                      the type documentation.
                     properties:
                       name:
                         description: Name of the ServiceAccount.
@@ -506,7 +568,36 @@ spec:
                     required:
                     - name
                     type: object
+                  uid:
+                    description: |-
+                      UID is the impersonated UID, sent as the Impersonate-Uid header. Requires
+                      UserName and is checked by the apiserver against
+                      authentication.k8s.io/uids with the `impersonate:user-info` verb.
+                    maxLength: 253
+                    type: string
+                  userName:
+                    description: |-
+                      UserName is a raw impersonated username, used instead of ServiceAccountRef
+                      when the apply identity is not a ServiceAccount. Combined with UID, Groups and
+                      Extra this expresses the full `user-info` constrained-impersonation identity.
+
+                      A `system:node:<name>` username is rejected: node impersonation forces
+                      Groups=[system:nodes] and is not a meaningful apply identity for this operator.
+                    maxLength: 253
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: 'serviceAccountRef is mutually exclusive with uid, groups
+                    and extra: setting any of them makes the apiserver skip the serviceaccount
+                    constrained-impersonation mode and silently fall back to legacy
+                    impersonation'
+                  rule: '!(has(self.serviceAccountRef) && ((has(self.uid) && self.uid
+                    != '''') || (has(self.groups) && size(self.groups) > 0) || (has(self.extra)
+                    && size(self.extra) > 0)))'
+                - message: userName and serviceAccountRef are mutually exclusive
+                  rule: '!(has(self.userName) && has(self.serviceAccountRef))'
+                - message: impersonating the system:masters group is not allowed
+                  rule: '!has(self.groups) || !self.groups.exists(g, g == ''system:masters'')'
               roleLimits:
                 description: RoleLimits constrains roles that may be generated.
                 properties:
@@ -516,6 +607,136 @@ spec:
                       AllowClusterRoles controls whether ClusterRoles may be generated.
                       Default is false (deny by default).
                     type: boolean
+                  constrainedImpersonation:
+                    description: |-
+                      ConstrainedImpersonation constrains Kubernetes constrained impersonation
+                      (KEP-5284) grants declared by RestrictedRoleDefinitions governed by this
+                      policy. When omitted, constrained impersonation grants are forbidden entirely
+                      (deny by default) — a RestrictedRoleDefinition that sets
+                      spec.constrainedImpersonation is reported as non-compliant.
+                    properties:
+                      allowed:
+                        default: false
+                        description: |-
+                          Allowed enables constrained impersonation grants under this policy.
+                          Defaults to false (deny by default).
+                        type: boolean
+                      allowedIdentityResources:
+                        description: |-
+                          AllowedIdentityResources restricts which identity resources may be granted.
+                          An empty list with allowed=true permits every identity resource.
+                        items:
+                          description: |-
+                            ImpersonationIdentityResource is the resource in the authentication.k8s.io API
+                            group that an identity rule grants against.
+                          enum:
+                          - users
+                          - groups
+                          - uids
+                          - userextras
+                          - serviceaccounts
+                          - nodes
+                          type: string
+                        maxItems: 6
+                        type: array
+                      allowedModes:
+                        description: |-
+                          AllowedModes restricts which impersonation modes may be used. An empty list
+                          with allowed=true permits every mode.
+                        items:
+                          description: |-
+                            ImpersonationMode selects one of the constrained impersonation modes defined by
+                            KEP-5284. The mode is derived by the apiserver from the Impersonate-User header
+                            value; this field declares which mode the generated RBAC grant targets.
+                          enum:
+                          - user-info
+                          - serviceaccount
+                          - arbitrary-node
+                          - associated-node
+                          type: string
+                        maxItems: 4
+                        type: array
+                      forbidLegacyFallback:
+                        default: false
+                        description: |-
+                          ForbidLegacyFallback requires that the RestrictedRoleDefinition also excludes
+                          the legacy bare "impersonate" verb via restrictedVerbs. This closes knob #8 of
+                          the KEP integration surface: a pre-existing blanket `impersonate` grant wins by
+                          fallback and silently defeats every constraint expressed here.
+                        type: boolean
+                      forbiddenActionVerbs:
+                        description: |-
+                          ForbiddenActionVerbs lists underlying request verbs that must not appear in
+                          action rules. Entries are the bare verbs (e.g. "delete"), not the
+                          `impersonate-on:<mode>:` encoded form.
+                        items:
+                          minLength: 1
+                          type: string
+                        maxItems: 32
+                        type: array
+                      identityNameLimits:
+                        description: |-
+                          IdentityNameLimits constrains the identity names (resourceNames) a tenant may
+                          list in identity rules, using the same allow/deny prefix and suffix semantics
+                          as subject limits.
+                        properties:
+                          allowedNames:
+                            description: AllowedNames is a list of allowed subject
+                              names.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 128
+                            type: array
+                          allowedPrefixes:
+                            description: AllowedPrefixes is a list of allowed name
+                              prefixes.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            type: array
+                          allowedSuffixes:
+                            description: AllowedSuffixes is a list of allowed name
+                              suffixes.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            type: array
+                          forbiddenNames:
+                            description: ForbiddenNames is a list of forbidden subject
+                              names.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 128
+                            type: array
+                          forbiddenPrefixes:
+                            description: ForbiddenPrefixes is a list of forbidden
+                              name prefixes.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            type: array
+                          forbiddenSuffixes:
+                            description: ForbiddenSuffixes is a list of forbidden
+                              name suffixes.
+                            items:
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            type: array
+                        type: object
+                      maxIdentityNames:
+                        description: |-
+                          MaxIdentityNames limits how many identity names a single grant may allowlist
+                          across all identity rules. Nil means unlimited.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
                   forbiddenAPIGroups:
                     description: |-
                       ForbiddenAPIGroups is a list of API groups that must not appear in generated roles.
@@ -561,12 +782,16 @@ spec:
                     maxItems: 128
                     type: array
                   forbiddenVerbs:
-                    description: ForbiddenVerbs is a list of verbs that must not appear
-                      in generated roles.
+                    description: |-
+                      ForbiddenVerbs is a list of verbs that must not appear in generated roles.
+                      Constrained impersonation verbs may be listed here, either fully spelled out
+                      ("impersonate:user-info") or as a wildcard pattern ("impersonate:*",
+                      "impersonate-on:*"). MaxItems is 64 because each constrained impersonation
+                      mode x verb combination is a separate verb string.
                     items:
                       minLength: 1
                       type: string
-                    maxItems: 16
+                    maxItems: 64
                     type: array
                   maxRulesPerRole:
                     description: MaxRulesPerRole limits the number of rules in a single

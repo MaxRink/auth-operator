@@ -56,6 +56,42 @@ spec:
                   description: Principal represents a requesting user or service account
                     identity.
                   properties:
+                    extra:
+                      description: |-
+                        Extra matches SubjectAccessReview spec.extra entries. All listed matchers must
+                        match (AND) for the principal to match. This makes attributes such as
+                        authentication.kubernetes.io/node-name — the value the associated-node
+                        impersonation mode is keyed on — usable in authorization decisions.
+                      items:
+                        description: |-
+                          PrincipalExtraMatch matches a single SubjectAccessReview spec.extra entry.
+                          The apiserver populates spec.extra from the authenticated requester's extra
+                          values, including impersonation-related keys such as
+                          authentication.kubernetes.io/node-name.
+                        properties:
+                          key:
+                            description: Key is the extra key to match, e.g. "authentication.kubernetes.io/node-name".
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          values:
+                            description: |-
+                              Values are the accepted values for Key. The principal matches when at least
+                              one of the request's values for Key is listed here. Use ["*"] to require only
+                              that the key is present with any non-empty value.
+                            items:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            minItems: 1
+                            type: array
+                        required:
+                        - key
+                        - values
+                        type: object
+                      maxItems: 16
+                      type: array
                     groups:
                       description: Groups is the requesting user groups in SubjectAccessReview
                         request.
@@ -70,6 +106,14 @@ spec:
                         system:serviceaccount:<namespace>:<name> username.
                       maxLength: 253
                       type: string
+                    uid:
+                      description: |-
+                        UID matches SubjectAccessReview spec.uid, the UID of the authenticated
+                        requester. Matching on UID pins a principal to one specific identity instance
+                        even when usernames are reused, which matters for constrained impersonation
+                        because the requester's UID is part of the impersonation authorization check.
+                      maxLength: 253
+                      type: string
                     user:
                       description: User is the requesting user in SubjectAccessReview
                         request.
@@ -77,9 +121,11 @@ spec:
                       type: string
                   type: object
                   x-kubernetes-validations:
-                  - message: principal must specify user or at least one group
+                  - message: principal must specify user, uid, at least one group,
+                      or at least one extra matcher
                     rule: (has(self.user) && self.user != "") || (has(self.groups)
-                      && size(self.groups) > 0)
+                      && size(self.groups) > 0) || (has(self.uid) && self.uid != "")
+                      || (has(self.extra) && size(self.extra) > 0)
                 maxItems: 256
                 type: array
               deniedPrincipals:
@@ -90,6 +136,42 @@ spec:
                   description: Principal represents a requesting user or service account
                     identity.
                   properties:
+                    extra:
+                      description: |-
+                        Extra matches SubjectAccessReview spec.extra entries. All listed matchers must
+                        match (AND) for the principal to match. This makes attributes such as
+                        authentication.kubernetes.io/node-name — the value the associated-node
+                        impersonation mode is keyed on — usable in authorization decisions.
+                      items:
+                        description: |-
+                          PrincipalExtraMatch matches a single SubjectAccessReview spec.extra entry.
+                          The apiserver populates spec.extra from the authenticated requester's extra
+                          values, including impersonation-related keys such as
+                          authentication.kubernetes.io/node-name.
+                        properties:
+                          key:
+                            description: Key is the extra key to match, e.g. "authentication.kubernetes.io/node-name".
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          values:
+                            description: |-
+                              Values are the accepted values for Key. The principal matches when at least
+                              one of the request's values for Key is listed here. Use ["*"] to require only
+                              that the key is present with any non-empty value.
+                            items:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            maxItems: 64
+                            minItems: 1
+                            type: array
+                        required:
+                        - key
+                        - values
+                        type: object
+                      maxItems: 16
+                      type: array
                     groups:
                       description: Groups is the requesting user groups in SubjectAccessReview
                         request.
@@ -104,6 +186,14 @@ spec:
                         system:serviceaccount:<namespace>:<name> username.
                       maxLength: 253
                       type: string
+                    uid:
+                      description: |-
+                        UID matches SubjectAccessReview spec.uid, the UID of the authenticated
+                        requester. Matching on UID pins a principal to one specific identity instance
+                        even when usernames are reused, which matters for constrained impersonation
+                        because the requester's UID is part of the impersonation authorization check.
+                      maxLength: 253
+                      type: string
                     user:
                       description: User is the requesting user in SubjectAccessReview
                         request.
@@ -111,11 +201,29 @@ spec:
                       type: string
                   type: object
                   x-kubernetes-validations:
-                  - message: principal must specify user or at least one group
+                  - message: principal must specify user, uid, at least one group,
+                      or at least one extra matcher
                     rule: (has(self.user) && self.user != "") || (has(self.groups)
-                      && size(self.groups) > 0)
+                      && size(self.groups) > 0) || (has(self.uid) && self.uid != "")
+                      || (has(self.extra) && size(self.extra) > 0)
                 maxItems: 256
                 type: array
+              impersonationVerbPolicy:
+                default: RequireExplicitVerb
+                description: |-
+                  ImpersonationVerbPolicy controls how this authorizer treats Kubernetes
+                  constrained impersonation (KEP-5284) verbs — `impersonate:<mode>` and
+                  `impersonate-on:<mode>:<verb>` — in resourceRules[].verbs.
+
+                  Defaults to "RequireExplicitVerb", which is a deliberate hardening: a
+                  pre-existing rule with verbs: ["*"] would otherwise silently start granting
+                  constrained impersonation the moment the feature gate is on. See the
+                  ImpersonationVerbPolicy type documentation for the full rationale.
+                enum:
+                - RequireExplicitVerb
+                - AllowWildcard
+                - Deny
+                type: string
               namespaceSelector:
                 description: NamespaceSelector is a label selector to match namespaces
                   that should allow the specified API calls.
