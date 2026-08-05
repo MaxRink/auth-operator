@@ -363,6 +363,58 @@ var _ = Describe("Constrained impersonation CRD schema and admission", func() {
 			Expect(err.Error()).To(ContainSubstring("legacy impersonation"))
 		})
 
+		// Regression guard for the header-mixing CEL rule itself.
+		//
+		// The three specs around this one are satisfied by EITHER the CEL
+		// XValidation rule or the Go admission webhook, so they still pass when the
+		// CEL rule is broken or absent. A malformed CEL rule makes the whole CRD
+		// uninstallable, and that failure mode previously reached main because no
+		// test asserted on the CEL layer specifically.
+		//
+		// Distinguishing the two layers by message text alone does NOT work: the Go
+		// validator's trapDetail happens to contain the same "silently fall back to
+		// legacy impersonation" wording, so asserting on that substring passes even
+		// with the CEL rule deleted (verified by deleting it and re-running).
+		//
+		// The reliable discriminator is the error's field path and cause. CEL rules on
+		// the ImpersonationConfig struct report Invalid on the struct path
+		// (spec.impersonation), whereas the Go webhook reports Forbidden on the
+		// offending child path (spec.impersonation.uid / .groups / .extra).
+		DescribeTable("enforces the header-mixing trap via the CEL rule on the generated CRD schema",
+			func(childField string, mutate func(*ImpersonationConfig)) {
+				ic := &ImpersonationConfig{
+					Enabled:           true,
+					ServiceAccountRef: &SARef{Namespace: "team-a", Name: "applier"},
+				}
+				mutate(ic)
+				err := k8sClient.Create(ctx, newPolicy(uniqueName("pol-cel-trap"), ic))
+				Expect(err).To(HaveOccurred())
+				// Emitted only by the CEL rule on the struct: an Invalid value on the
+				// struct path itself, not a Forbidden on the child field.
+				Expect(err.Error()).To(ContainSubstring("spec.impersonation: Invalid value"),
+					"the header-mixing CEL rule must be present in the generated CRD schema; "+
+						"a Forbidden error on spec.impersonation.%s means only the Go webhook rejected it",
+					childField)
+			},
+			Entry("uid", "uid", func(ic *ImpersonationConfig) { ic.UID = "uid-1" }),
+			Entry("groups", "groups", func(ic *ImpersonationConfig) { ic.Groups = []string{"dev"} }),
+			Entry("extra", "extra", func(ic *ImpersonationConfig) {
+				ic.Extra = []ImpersonationExtra{{Key: "example.com/a", Values: []string{"1"}}}
+			}),
+		)
+
+		// The positive half of the same rule: a serviceAccountRef with none of the
+		// conflicting fields must be accepted, so the CEL rule cannot regress into
+		// rejecting everything.
+		It("admits a serviceAccountRef with no uid, groups or extra (CEL positive case)", func() {
+			policy := newPolicy(uniqueName("pol-cel-ok"), &ImpersonationConfig{
+				Enabled:           true,
+				ServiceAccountRef: &SARef{Namespace: "team-a", Name: "applier"},
+			})
+			Expect(k8sClient.Create(ctx, policy)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, policy)).To(Succeed())
+		})
+
 		It("rejects mixing serviceAccountRef with groups", func() {
 			policy := newPolicy(uniqueName("pol-trap-groups"), &ImpersonationConfig{
 				Enabled:           true,
