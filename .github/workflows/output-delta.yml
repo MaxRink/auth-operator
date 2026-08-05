@@ -262,12 +262,14 @@ jobs:
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
             --as=output-delta-unassigned
-          # sample-policy-constrained-impersonation sets
-          # subjectLimits.allowedKinds: [ServiceAccount, Group], so the requester
-          # must be a ServiceAccount. team-alpha-rbac-applier is already a
-          # subject of the requester ClusterRoleBinding above.
+          # sample-policy-constrained-impersonation declares no defaultAssignment,
+          # so its requester must be an identity that no OTHER policy claims:
+          # the default-policy-assignment webhook pins each assigned requester to
+          # its own policy and rejects any other policyRef. output-delta-unassigned
+          # exists for exactly this case and is already a requester subject above.
+          # (subjectLimits.allowedKinds constrains spec.subjects, not the requester.)
           apply_policy_docs sample-policy-constrained-impersonation \
-            --as=system:serviceaccount:team-alpha:team-alpha-rbac-applier
+            --as=output-delta-unassigned
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh
 
@@ -704,12 +706,14 @@ jobs:
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
             --as=output-delta-unassigned
-          # sample-policy-constrained-impersonation sets
-          # subjectLimits.allowedKinds: [ServiceAccount, Group], so the requester
-          # must be a ServiceAccount. team-alpha-rbac-applier is already a
-          # subject of the requester ClusterRoleBinding above.
+          # sample-policy-constrained-impersonation declares no defaultAssignment,
+          # so its requester must be an identity that no OTHER policy claims:
+          # the default-policy-assignment webhook pins each assigned requester to
+          # its own policy and rejects any other policyRef. output-delta-unassigned
+          # exists for exactly this case and is already a requester subject above.
+          # (subjectLimits.allowedKinds constrains spec.subjects, not the requester.)
           apply_policy_docs sample-policy-constrained-impersonation \
-            --as=system:serviceaccount:team-alpha:team-alpha-rbac-applier
+            --as=output-delta-unassigned
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh
 
