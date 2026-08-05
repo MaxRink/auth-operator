@@ -226,7 +226,7 @@ jobs:
             while IFS= read -r policy; do
               [ -n "$policy" ] || continue
               case "$policy" in
-                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings)
+                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings|sample-policy-constrained-impersonation)
                   ;;
                 *)
                   echo "::error::Restricted sample policyRef $policy has no output-delta requester mapping"
@@ -262,6 +262,12 @@ jobs:
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
             --as=output-delta-unassigned
+          # sample-policy-constrained-impersonation sets
+          # subjectLimits.allowedKinds: [ServiceAccount, Group], so the requester
+          # must be a ServiceAccount. team-alpha-rbac-applier is already a
+          # subject of the requester ClusterRoleBinding above.
+          apply_policy_docs sample-policy-constrained-impersonation \
+            --as=system:serviceaccount:team-alpha:team-alpha-rbac-applier
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh
 
@@ -662,7 +668,7 @@ jobs:
             while IFS= read -r policy; do
               [ -n "$policy" ] || continue
               case "$policy" in
-                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings)
+                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings|sample-policy-constrained-impersonation)
                   ;;
                 *)
                   echo "::error::Restricted sample policyRef $policy has no output-delta requester mapping"
@@ -698,6 +704,12 @@ jobs:
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
             --as=output-delta-unassigned
+          # sample-policy-constrained-impersonation sets
+          # subjectLimits.allowedKinds: [ServiceAccount, Group], so the requester
+          # must be a ServiceAccount. team-alpha-rbac-applier is already a
+          # subject of the requester ClusterRoleBinding above.
+          apply_policy_docs sample-policy-constrained-impersonation \
+            --as=system:serviceaccount:team-alpha:team-alpha-rbac-applier
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh
 
