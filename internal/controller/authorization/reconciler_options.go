@@ -6,8 +6,6 @@ package authorization
 
 import (
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/telekom/auth-operator/pkg/capabilities"
 )
 
 // tracerSetter is implemented by reconcilers that support OpenTelemetry tracing.
@@ -39,7 +37,12 @@ func WithTracer(t trace.Tracer) ReconcilerOption {
 //
 // Without a detector, constrained impersonation grants still reconcile normally;
 // their ConstrainedImpersonationEffective condition is reported as Unknown.
-func WithCapabilityDetector(d *capabilities.Detector) ReconcilerOption {
+//
+// The parameter is the local capabilityDetector interface rather than the concrete
+// *capabilities.Detector, so tests can inject a stub without building a full
+// detector. Production wiring in cmd/ passes a *capabilities.Detector, which
+// satisfies it.
+func WithCapabilityDetector(d capabilityDetector) ReconcilerOption {
 	return func(r tracerSetter) {
 		setter, ok := r.(capabilityDetectorSetter)
 		if !ok || d == nil {
