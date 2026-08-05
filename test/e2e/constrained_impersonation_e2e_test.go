@@ -272,11 +272,28 @@ metadata:
 	})
 
 	AfterAll(func() {
-		if utils.ShouldTeardown() {
-			By("Uninstalling the Helm release")
-			cmd := utils.CommandContext(context.Background(), "helm", "uninstall", ciRelease, "--namespace", ciOperatorNS)
-			_, _ = utils.Run(cmd)
-		}
+		// The Helm release is owned by THIS suite and installs a second,
+		// cluster-scoped operator: its CRDs and webhook configurations are
+		// cluster-wide and its manager watches every namespace. Leaving it
+		// running lets it reconcile the other suites' objects, so two managers
+		// race over the same resources. That is what made the shared-operator
+		// BindDefinition ServiceAccount spec fail: the sibling manager created
+		// e2e-auto-created-sa, the owning manager then classified it as
+		// pre-existing/foreign and reported generatedSAs=0.
+		//
+		// The uninstall is therefore unconditional and must NOT be gated on
+		// utils.ShouldTeardown(). That gate exists for the operator this suite
+		// did not create (the shared one deployed by the suite bootstrap, which
+		// later specs still need); it must never leak a manager we installed.
+		// Helm does not delete chart/auth-operator/crds/ on uninstall and the
+		// webhook configurations are release-name-scoped, so removing this
+		// release cannot disturb the shared operator.
+		By("Uninstalling the Helm release")
+		cmd := utils.CommandContext(context.Background(), "helm", "uninstall", ciRelease, "--namespace", ciOperatorNS)
+		_, _ = utils.Run(cmd)
+		Expect(utils.WaitForDeploymentGone("control-plane=controller-manager", ciOperatorNS, deployTimeout)).To(Succeed(),
+			"the constrained impersonation operator must be gone before later specs run")
+
 		By("Cleaning up constrained impersonation test resources")
 		for _, name := range []string{grantRDName, legacyRDName, targetRDName} {
 			cmd := utils.CommandContext(context.Background(), "kubectl", "delete", "roledefinition", name, "--ignore-not-found=true")

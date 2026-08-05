@@ -433,6 +433,36 @@ func WaitForDeploymentAvailable(labelSelector, namespace string, timeout time.Du
 	return err
 }
 
+// WaitForDeploymentGone waits until no deployment matching the label selector
+// remains in the namespace.
+//
+// Suites that install their own operator use this to prove the manager is
+// actually gone before later specs run. A manager that outlives its suite keeps
+// reconciling cluster-wide and races the operator those later specs own.
+//
+// `kubectl wait --for=delete` needs the object to still exist when it starts, so
+// it errors out if the deployment has already been removed. This polls instead,
+// which makes "already gone" the success case.
+func WaitForDeploymentGone(labelSelector, namespace string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		cmd := CommandContext(context.Background(), "kubectl", "get", "deployment", // #nosec G204
+			"-l", labelSelector,
+			"-n", namespace,
+			"--no-headers",
+			"--ignore-not-found")
+		output, err := Run(cmd)
+		if err == nil && strings.TrimSpace(string(output)) == "" {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("timeout waiting for deployments with label %s in namespace %s to be deleted",
+				labelSelector, namespace)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
 // WaitForServiceEndpoints waits for a service to have endpoints.
 func WaitForServiceEndpoints(serviceName, namespace string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
