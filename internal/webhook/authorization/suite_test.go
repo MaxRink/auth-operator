@@ -26,6 +26,7 @@ import (
 
 	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	"github.com/telekom/auth-operator/pkg/indexer"
+	"github.com/telekom/auth-operator/test/envtestutil"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -63,6 +64,12 @@ var _ = BeforeSuite(func() {
 	}
 
 	var err error
+	// Allow the kube-apiserver feature gates to be overridden so the same suite can
+	// run with ConstrainedImpersonation on (1.36 default) and explicitly off.
+	if gates := envtestutil.ApplyFeatureGatesFromEnv(envTestEnv); gates != "" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "envtest kube-apiserver feature gates: %s\n", gates)
+	}
+
 	envCfg, err = envTestEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(envCfg).NotTo(BeNil())

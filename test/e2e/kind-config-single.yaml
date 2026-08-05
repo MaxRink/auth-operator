@@ -11,6 +11,16 @@ nodes:
         nodeRegistration:
           kubeletExtraArgs:
             node-labels: "ingress-ready=true"
+      # ConstrainedImpersonation (KEP-5284) is beta and on by default from
+      # Kubernetes 1.36, so it is set explicitly here only to make the e2e
+      # expectations independent of the kindest/node default. Flip to false, or use
+      # kind-config-single-no-constrained-impersonation.yaml, to exercise the
+      # graceful-degradation path.
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            feature-gates: "ConstrainedImpersonation=true"
 networking:
   podSubnet: "10.244.0.0/16"
   serviceSubnet: "10.96.0.0/12"

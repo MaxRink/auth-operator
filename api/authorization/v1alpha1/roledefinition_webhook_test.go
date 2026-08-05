@@ -751,8 +751,10 @@ var _ = Describe("RoleDefinition Webhook", func() {
 
 	Context("MaxItems and field validation constraints", func() {
 
-		It("should reject RestrictedVerbs exceeding MaxItems=16", func() {
-			verbs := make([]string, 17)
+		It("should reject RestrictedVerbs exceeding MaxItems=64", func() {
+			// MaxItems was raised from 16 to 64 when constrained impersonation verbs
+			// became expressible: each mode x verb combination is a separate entry.
+			verbs := make([]string, 65)
 			for i := range verbs {
 				verbs[i] = "get"
 			}
@@ -1008,12 +1010,13 @@ var _ = Describe("RoleDefinition Webhook", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("Should reject RestrictedAPIs verbs exceeding MaxItems=16", func() {
-			// Use 17 distinct lowercase-letter-only verbs to match the CRD regex ^([a-z]+|\\*)$
-			manyVerbs := []string{
-				"get", "list", "create", "update", "patch", "delete", "watch",
-				"deletecollection", "proxy", "bind", "escalate", "impersonate",
-				"approve", "sign", "attest", "audit", "manage",
+		It("Should reject RestrictedAPIs verbs exceeding MaxItems=64", func() {
+			// MaxItems was raised from 16 to 64 when constrained impersonation verbs
+			// became expressible. Duplicate "get" entries still count towards MaxItems and
+			// match the widened verb pattern.
+			manyVerbs := make([]string, 65)
+			for i := range manyVerbs {
+				manyVerbs[i] = "get"
 			}
 			rd := &RoleDefinition{
 				ObjectMeta: metav1.ObjectMeta{

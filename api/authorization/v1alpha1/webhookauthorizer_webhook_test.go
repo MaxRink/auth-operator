@@ -161,7 +161,7 @@ var _ = Describe("WebhookAuthorizer CEL Validation", func() {
 			}
 			err := k8sClient.Create(ctx, wa)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("principal must specify user or at least one group"))
+			Expect(err.Error()).To(ContainSubstring("principal must specify user, uid, at least one group, or at least one extra matcher"))
 		})
 	})
 })

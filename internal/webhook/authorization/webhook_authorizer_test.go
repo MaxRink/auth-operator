@@ -2136,7 +2136,7 @@ func TestPrincipalMatches_ServiceAccountNamespaceScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := handler.principalMatches(tt.user, tt.groups, tt.principals); got != tt.want {
+			if got := handler.principalMatches(&authzv1.SubjectAccessReview{Spec: authzv1.SubjectAccessReviewSpec{User: tt.user, Groups: tt.groups}}, tt.principals); got != tt.want {
 				t.Fatalf("principalMatches() = %t, want %t", got, tt.want)
 			}
 		})
@@ -2158,7 +2158,7 @@ func TestResourceRuleIndex_SubresourceMatching(t *testing.T) {
 
 	t.Run("pods request matches pods rule", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx != 0 {
 			t.Errorf("expected rule index 0 for pods, got %d", idx)
 		}
@@ -2166,7 +2166,7 @@ func TestResourceRuleIndex_SubresourceMatching(t *testing.T) {
 
 	t.Run("pods/log subresource matches pods/log rule not pods rule", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods", Subresource: "log"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx != 1 {
 			t.Errorf("expected rule index 1 for pods/log subresource, got %d (a pods-only rule must NOT match pods/log)", idx)
 		}
@@ -2174,7 +2174,7 @@ func TestResourceRuleIndex_SubresourceMatching(t *testing.T) {
 
 	t.Run("pods/exec subresource not matched by any rule", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods", Subresource: "exec"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx >= 0 {
 			t.Errorf("expected no match for pods/exec subresource, got rule index %d", idx)
 		}
@@ -2196,7 +2196,7 @@ func TestResourceRuleIndex_ResourceNamesMatching(t *testing.T) {
 
 	t.Run("named pod matches rule with matching ResourceName", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods", Name: "specific-pod"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx != 0 {
 			t.Errorf("expected rule index 0 for specific-pod, got %d", idx)
 		}
@@ -2204,7 +2204,7 @@ func TestResourceRuleIndex_ResourceNamesMatching(t *testing.T) {
 
 	t.Run("different pod name does not match ResourceNames-restricted rule", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods", Name: "other-pod"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx >= 0 {
 			t.Errorf("expected no match for other-pod when rule restricts ResourceNames, got rule index %d", idx)
 		}
@@ -2212,7 +2212,7 @@ func TestResourceRuleIndex_ResourceNamesMatching(t *testing.T) {
 
 	t.Run("list with no name restriction matches rule without ResourceNames", func(t *testing.T) {
 		attr := &authzv1.ResourceAttributes{Verb: "list", Group: "", Resource: "pods"}
-		idx := handler.resourceRuleIndex(rules, attr)
+		idx := handler.resourceRuleIndex(rules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx != 1 {
 			t.Errorf("expected rule index 1 for list pods, got %d", idx)
 		}
@@ -2223,7 +2223,7 @@ func TestResourceRuleIndex_ResourceNamesMatching(t *testing.T) {
 			{Verbs: []string{"get"}, APIGroups: []string{""}, Resources: []string{"pods"}, ResourceNames: []string{"*"}},
 		}
 		attr := &authzv1.ResourceAttributes{Verb: "get", Group: "", Resource: "pods", Name: "any-pod"}
-		idx := handler.resourceRuleIndex(wildcardRules, attr)
+		idx := handler.resourceRuleIndex(wildcardRules, attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 		if idx != 0 {
 			t.Errorf("expected rule index 0 for wildcard ResourceNames, got %d", idx)
 		}
@@ -2272,7 +2272,7 @@ func TestResourceRuleIndex_KubernetesWildcardSemantics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			idx := handler.resourceRuleIndex([]authzv1.ResourceRule{tt.rule}, &tt.attr)
+			idx := handler.resourceRuleIndex([]authzv1.ResourceRule{tt.rule}, &tt.attr, authzv1alpha1.ImpersonationVerbPolicyRequireExplicitVerb)
 			got := idx >= 0
 			if got != tt.want {
 				t.Fatalf("resourceRuleIndex() matched = %t, want %t", got, tt.want)

@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Deutsche Telekom AG
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Kind cluster configuration for single-node e2e testing with the
+# ConstrainedImpersonation (KEP-5284) feature gate explicitly DISABLED.
+#
+# This is the backwards-compatibility fixture. It proves that on an API server
+# without constrained impersonation the operator still reconciles successfully,
+# still generates the requested RBAC, and correctly reports the grant as inert via
+# the ConstrainedImpersonationEffective condition, while a legacy `impersonate`
+# grant continues to work unchanged.
+#
+# Run with: make test-e2e-constrained-impersonation-disabled
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: auth-operator-e2e-single-no-ci
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+      - |
+        kind: ClusterConfiguration
+        apiServer:
+          extraArgs:
+            feature-gates: "ConstrainedImpersonation=false"
+networking:
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"

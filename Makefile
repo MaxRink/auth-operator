@@ -91,6 +91,9 @@ test: manifests generate fmt vet envtest ## Run tests.
 E2E_IMG ?= auth-operator:e2e-test
 KIND_CONFIG_SINGLE ?= test/e2e/kind-config-single.yaml
 KIND_CONFIG_MULTI ?= test/e2e/kind-config-multi.yaml
+# Same single-node topology but with the ConstrainedImpersonation (KEP-5284)
+# feature gate explicitly disabled, used to verify graceful degradation.
+KIND_CONFIG_SINGLE_NO_CI ?= test/e2e/kind-config-single-no-constrained-impersonation.yaml
 
 .PHONY: kind-create
 kind-create: ## Create a single-node kind cluster for e2e testing.
@@ -279,6 +282,38 @@ test-e2e-all: ## Run non-Helm/non-complex e2e tests on multi-node cluster.
 	else \
 		if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-all; fi; exit 1; \
 	fi
+
+.PHONY: test-e2e-constrained-impersonation
+test-e2e-constrained-impersonation: ## Run constrained impersonation e2e tests with the feature gate ENABLED.
+	@set -e; \
+	if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-ci; fi; \
+	$(MAKE) kind-create KIND_CLUSTER_NAME=auth-operator-e2e-ci; \
+	$(MAKE) kind-load-image KIND_CLUSTER_NAME=auth-operator-e2e-ci; \
+	if KIND_CLUSTER=auth-operator-e2e-ci IMG=$(E2E_IMG) E2E_CONSTRAINED_IMPERSONATION=enabled \
+		go test -tags e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="constrained-impersonation" -timeout 45m; then \
+		if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-ci; fi; \
+	else \
+		if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-ci; fi; exit 1; \
+	fi
+
+.PHONY: test-e2e-constrained-impersonation-disabled
+test-e2e-constrained-impersonation-disabled: ## Run constrained impersonation e2e tests with the feature gate DISABLED (graceful degradation).
+	@set -e; \
+	if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-noci; fi; \
+	$(MAKE) kind-create KIND_CLUSTER_NAME=auth-operator-e2e-noci KIND_CONFIG_SINGLE=$(KIND_CONFIG_SINGLE_NO_CI); \
+	$(MAKE) kind-load-image KIND_CLUSTER_NAME=auth-operator-e2e-noci; \
+	if KIND_CLUSTER=auth-operator-e2e-noci IMG=$(E2E_IMG) E2E_CONSTRAINED_IMPERSONATION=disabled \
+		go test -tags e2e ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter="constrained-impersonation" -timeout 45m; then \
+		if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-noci; fi; \
+	else \
+		if [ "$(SKIP_E2E_CLEANUP)" != "true" ]; then $(MAKE) kind-delete KIND_CLUSTER_NAME=auth-operator-e2e-noci; fi; exit 1; \
+	fi
+
+.PHONY: test-envtest-constrained-impersonation-disabled
+test-envtest-constrained-impersonation-disabled: envtest ## Run the envtest suites with the ConstrainedImpersonation gate disabled.
+	CGO_ENABLED=1 AUTH_OPERATOR_ENVTEST_FEATURE_GATES=ConstrainedImpersonation=false \
+		KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+		go test -race -covermode=atomic ./api/... ./internal/... ./pkg/...
 
 .PHONY: test-e2e-output
 test-e2e-output: ## Show the e2e test output directory.

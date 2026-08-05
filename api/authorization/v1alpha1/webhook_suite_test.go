@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/telekom/auth-operator/test/envtestutil"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -74,6 +76,12 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	// cfg is defined in this file globally.
+	// Allow the kube-apiserver feature gates to be overridden so the same suite can
+	// run with ConstrainedImpersonation on (1.36 default) and explicitly off.
+	if gates := envtestutil.ApplyFeatureGatesFromEnv(testEnv); gates != "" {
+		_, _ = fmt.Fprintf(GinkgoWriter, "envtest kube-apiserver feature gates: %s\n", gates)
+	}
+
 	cfg, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
