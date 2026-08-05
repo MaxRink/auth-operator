@@ -11,8 +11,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 
 	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	"github.com/telekom/auth-operator/pkg/capabilities"
@@ -277,6 +279,160 @@ func TestSetConstrainedImpersonationConditionClearsStaleCondition(t *testing.T) 
 	setConstrainedImpersonationCondition(context.Background(), obj, obj.Generation, nil, nil, detector)
 	if cond := conditions.Get(obj, authorizationv1alpha1.ConstrainedImpersonationCondition); cond != nil {
 		t.Errorf("expected the stale condition to be removed, got %+v", cond)
+	}
+}
+
+// TestRecordConstrainedImpersonationStateEmitsWarningOnLegacyFallback pins the
+// security-relevant case Copilot flagged on PR #513: when the detector reports the
+// feature gate as Enabled but the definition leaves the legacy blanket
+// "impersonate" verb reachable, the grant is defeated by fallback. The helper must
+// therefore return a non-Enabled Result so the reconciler still emits the Warning
+// event, and the event note must describe the legacy fallback rather than the
+// (irrelevant) feature-gate detail.
+func TestRecordConstrainedImpersonationStateEmitsWarningOnLegacyFallback(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		restrictedVerbs []string
+		wantEvent       bool
+		wantNote        string
+	}{
+		{
+			name: "legacy fallback reachable while the gate is enabled still warns",
+			// restrictedVerbs does not strip the legacy verb.
+			restrictedVerbs: nil,
+			wantEvent:       true,
+			wantNote:        "restrictedVerbs",
+		},
+		{
+			name:            "legacy fallback closed and gate enabled emits no warning",
+			restrictedVerbs: []string{authorizationv1alpha1.LegacyImpersonateVerb},
+			wantEvent:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			recorder := events.NewFakeRecorder(4)
+			r := &RoleDefinitionReconciler{
+				recorder: recorder,
+				capabilityDetector: stubDetector{result: capabilities.Result{
+					State:  capabilities.StateEnabled,
+					Reason: capabilities.ReasonFeatureGateEnabled,
+					Detail: "feature gate ConstrainedImpersonation is enabled",
+				}},
+			}
+			rd := &authorizationv1alpha1.RoleDefinition{}
+			rd.Generation = 5
+			rd.Spec.ConstrainedImpersonation = testGrant()
+			rd.Spec.RestrictedVerbs = tt.restrictedVerbs
+
+			r.recordConstrainedImpersonationState(context.Background(), rd)
+
+			select {
+			case ev := <-recorder.Events:
+				if !tt.wantEvent {
+					t.Fatalf("did not expect a Warning event, got %q", ev)
+				}
+				if !strings.HasPrefix(ev, corev1.EventTypeWarning+" ") {
+					t.Errorf("event is not a Warning: %q", ev)
+				}
+				if !strings.Contains(ev, tt.wantNote) {
+					t.Errorf("event note %q does not mention %q; the detail must describe the "+
+						"legacy fallback, not the feature-gate state", ev, tt.wantNote)
+				}
+				if strings.Contains(ev, "feature gate ConstrainedImpersonation is enabled") {
+					t.Errorf("event note carries the unrelated detector detail: %q", ev)
+				}
+			default:
+				if tt.wantEvent {
+					t.Fatal("expected a Warning event because the legacy impersonate fallback is " +
+						"reachable, but none was emitted")
+				}
+			}
+
+			cond := conditions.Get(rd, authorizationv1alpha1.ConstrainedImpersonationCondition)
+			if cond == nil {
+				t.Fatal("expected the ConstrainedImpersonationEffective condition to be set")
+			}
+			wantStatus := metav1.ConditionTrue
+			if tt.wantEvent {
+				wantStatus = metav1.ConditionFalse
+			}
+			if cond.Status != wantStatus {
+				t.Errorf("condition status = %q, want %q", cond.Status, wantStatus)
+			}
+		})
+	}
+}
+
+// TestSetConstrainedImpersonationConditionLegacyFallbackResult asserts the
+// returned Result directly, so the contract callers rely on cannot silently
+// regress back to passing the detector's answer through.
+func TestSetConstrainedImpersonationConditionLegacyFallbackResult(t *testing.T) {
+	t.Parallel()
+
+	obj := &authorizationv1alpha1.RoleDefinition{}
+	obj.Generation = 1
+	result := setConstrainedImpersonationCondition(
+		context.Background(), obj, obj.Generation, testGrant(), nil,
+		stubDetector{result: capabilities.Result{
+			State:         capabilities.StateEnabled,
+			Reason:        capabilities.ReasonFeatureGateEnabled,
+			Detail:        "gate on",
+			ServerVersion: "v1.36.0",
+		}},
+	)
+
+	if result.State == capabilities.StateEnabled {
+		t.Error("state must not be Enabled while the legacy impersonate fallback is reachable")
+	}
+	if result.State != capabilities.StateDisabled {
+		t.Errorf("state = %q, want %q", result.State, capabilities.StateDisabled)
+	}
+	if result.Reason != legacyFallbackReachableReason {
+		t.Errorf("reason = %q, want %q", result.Reason, legacyFallbackReachableReason)
+	}
+	if !strings.Contains(result.Detail, authorizationv1alpha1.LegacyImpersonateVerb) {
+		t.Errorf("detail %q does not mention the legacy verb", result.Detail)
+	}
+	if result.Detail == "gate on" {
+		t.Error("detail leaked the detector's unrelated feature-gate explanation")
+	}
+	// The condition message args and the event note must be the same string.
+	cond := conditions.Get(obj, authorizationv1alpha1.ConstrainedImpersonationCondition)
+	if cond == nil || !strings.Contains(cond.Message, result.Detail) {
+		t.Errorf("condition message %+v does not carry the returned detail %q", cond, result.Detail)
+	}
+	if result.ServerVersion != "v1.36.0" {
+		t.Errorf("serverVersion = %q, want the detected version to be preserved", result.ServerVersion)
+	}
+}
+
+// TestWithCapabilityDetectorAcceptsInterface pins the option signature to the
+// local interface so a stub can be injected without building a real Detector.
+func TestWithCapabilityDetectorAcceptsInterface(t *testing.T) {
+	t.Parallel()
+
+	stub := stubDetector{result: capabilities.Result{State: capabilities.StateDisabled}}
+	r := &RoleDefinitionReconciler{}
+	WithCapabilityDetector(stub)(r)
+
+	if r.capabilityDetector == nil {
+		t.Fatal("expected the stub detector to be wired onto the reconciler")
+	}
+	if got := r.capabilityDetector.ConstrainedImpersonation(context.Background()); got.State != capabilities.StateDisabled {
+		t.Errorf("wired detector returned %q, want Disabled", got.State)
+	}
+
+	// A nil detector must be ignored rather than wiring a nil interface.
+	fresh := &RoleDefinitionReconciler{}
+	WithCapabilityDetector(nil)(fresh)
+	if fresh.capabilityDetector != nil {
+		t.Error("a nil detector must not be wired")
 	}
 }
 

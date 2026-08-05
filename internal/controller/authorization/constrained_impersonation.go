@@ -23,6 +23,12 @@ type capabilityDetector interface {
 	ConstrainedImpersonation(ctx context.Context) capabilities.Result
 }
 
+// legacyFallbackReachableReason is the machine-readable reason carried by the
+// synthetic capabilities.Result returned when a grant leaves the legacy blanket
+// "impersonate" verb reachable. It is not a detector reason: the API server
+// capability is irrelevant once the constraint can be bypassed by fallback.
+const legacyFallbackReachableReason = "LegacyFallbackReachable"
+
 // appendConstrainedImpersonationRules appends the RBAC rules generated from a
 // constrained-impersonation grant to the discovery-derived rules of a role.
 //
@@ -65,6 +71,12 @@ type conditionSetter interface {
 //   - gate disabled/too old -> condition False,   reason FeatureGateDisabled / VersionTooOld
 //   - undetectable          -> condition Unknown, reason FeatureStateUnknown
 //
+// A reachable legacy blanket "impersonate" verb takes precedence over all of the
+// above and yields condition False, reason LegacyFallbackReachable. The returned
+// capabilities.Result is then synthetic (StateDisabled) rather than the detector's
+// own answer, so callers that gate the Warning event on result.State still emit it
+// and see the legacy-fallback detail.
+//
 // The condition is deliberately NOT wired into Ready: the operator did apply
 // exactly what was asked for, and failing reconciliation would make the operator
 // unusable on clusters where /metrics is unreadable. It is a warning surface, not
@@ -105,12 +117,24 @@ func setConstrainedImpersonationCondition(
 	if !legacyImpersonateRestricted(restrictedVerbs) {
 		logger.V(1).Info("constrained impersonation grant leaves the legacy impersonate fallback reachable",
 			"mode", spec.Mode)
+		detail := fmt.Sprintf("add %q to spec.restrictedVerbs so the generated role cannot carry the blanket verb",
+			authorizationv1alpha1.LegacyImpersonateVerb)
 		conditions.MarkFalse(obj, authorizationv1alpha1.ConstrainedImpersonationCondition, generation,
 			authorizationv1alpha1.ConstrainedImpersonationReasonLegacyFallback,
 			authorizationv1alpha1.ConstrainedImpersonationMessageLegacyFallback,
-			fmt.Sprintf("add %q to spec.restrictedVerbs so the generated role cannot carry the blanket verb",
-				authorizationv1alpha1.LegacyImpersonateVerb))
-		return result
+			detail)
+		// Deliberately NOT the detector's own result: a reachable legacy fallback
+		// defeats the grant no matter what the feature gate says, so returning the
+		// detector's StateEnabled here would make callers such as
+		// recordConstrainedImpersonationState skip the Warning event and report a
+		// detail unrelated to the actual problem. The synthetic result carries the
+		// same detail as the condition so event and condition stay consistent.
+		return capabilities.Result{
+			State:         capabilities.StateDisabled,
+			Reason:        legacyFallbackReachableReason,
+			Detail:        detail,
+			ServerVersion: result.ServerVersion,
+		}
 	}
 
 	switch result.State {
