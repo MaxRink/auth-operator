@@ -74,7 +74,7 @@ func (v *RestrictedRoleDefinitionValidator) ValidateCreate(ctx context.Context, 
 		return nil, err
 	}
 
-	return nil, nil
+	return ConstrainedImpersonationWarnings(obj.Spec.ConstrainedImpersonation, "spec.constrainedImpersonation"), nil
 }
 
 // ValidateUpdate implements admission.Validator for RestrictedRoleDefinition.
@@ -163,7 +163,7 @@ func (v *RestrictedRoleDefinitionValidator) ValidateUpdate(ctx context.Context, 
 		return nil, err
 	}
 
-	return nil, nil
+	return ConstrainedImpersonationWarnings(newObj.Spec.ConstrainedImpersonation, "spec.constrainedImpersonation"), nil
 }
 
 // ValidateDelete implements admission.Validator for RestrictedRoleDefinition.
@@ -241,6 +241,18 @@ func (v *RestrictedRoleDefinitionValidator) validateRestrictedRoleDefinitionSpec
 	// would take effect and subsequent entries would be silently ignored.
 	if err := validateNoDuplicateRestrictedRRDAPIs(obj); err != nil {
 		return err
+	}
+
+	// Structural validation of the constrained impersonation grant. Policy
+	// compliance (allowed modes, name limits, legacy-fallback) is evaluated by the
+	// controller against the governing RBACPolicy.
+	if errs := ValidateConstrainedImpersonationSpec(
+		obj.Spec.ConstrainedImpersonation,
+		obj.Spec.TargetRole == DefinitionClusterRole,
+		field.NewPath("spec", "constrainedImpersonation"),
+	); len(errs) > 0 {
+		return apierrors.NewInvalid(
+			schema.GroupKind{Group: GroupVersion.Group, Kind: RestrictedRoleDefinitionKind}, obj.Name, errs)
 	}
 
 	// Validate restrictedAPIs versions follow the expected format.

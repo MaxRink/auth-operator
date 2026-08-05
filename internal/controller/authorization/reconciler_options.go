@@ -4,11 +4,19 @@
 
 package authorization
 
-import "go.opentelemetry.io/otel/trace"
+import (
+	"go.opentelemetry.io/otel/trace"
+)
 
 // tracerSetter is implemented by reconcilers that support OpenTelemetry tracing.
 type tracerSetter interface {
 	setTracer(trace.Tracer)
+}
+
+// capabilityDetectorSetter is implemented by reconcilers that can surface
+// optional API server capability state (currently constrained impersonation).
+type capabilityDetectorSetter interface {
+	setCapabilityDetector(capabilityDetector)
 }
 
 // ReconcilerOption is a type-safe functional option for configuring reconcilers.
@@ -19,5 +27,27 @@ type ReconcilerOption func(tracerSetter)
 func WithTracer(t trace.Tracer) ReconcilerOption {
 	return func(r tracerSetter) {
 		r.setTracer(t)
+	}
+}
+
+// WithCapabilityDetector returns a ReconcilerOption that wires an API server
+// capability detector into reconcilers that support it. Reconcilers that do not
+// implement capabilityDetectorSetter ignore the option, so a single option list
+// can be shared across all reconcilers.
+//
+// Without a detector, constrained impersonation grants still reconcile normally;
+// their ConstrainedImpersonationEffective condition is reported as Unknown.
+//
+// The parameter is the local capabilityDetector interface rather than the concrete
+// *capabilities.Detector, so tests can inject a stub without building a full
+// detector. Production wiring in cmd/ passes a *capabilities.Detector, which
+// satisfies it.
+func WithCapabilityDetector(d capabilityDetector) ReconcilerOption {
+	return func(r tracerSetter) {
+		setter, ok := r.(capabilityDetectorSetter)
+		if !ok || d == nil {
+			return
+		}
+		setter.setCapabilityDetector(d)
 	}
 }

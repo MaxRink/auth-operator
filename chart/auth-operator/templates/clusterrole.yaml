@@ -6,6 +6,17 @@ metadata:
     app.kubernetes.io/component: controller-manager
   {{- include "auth-operator.labels" . | nindent 4 }}
 rules:
+# --- API server capability detection (constrained impersonation, KEP-5284) ---
+# Read-only access to the API server's own /metrics endpoint so the operator can
+# read the kubernetes_feature_enabled gauge and determine whether the
+# ConstrainedImpersonation feature gate is enabled. Without this the operator
+# falls back to a server-version comparison and reports the capability as Unknown.
+{{- if .Values.controller.constrainedImpersonation.capabilityDetection }}
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+{{- end }}
 # --- Namespace management (BindDefinition + RoleBindingTerminator) ---
 - apiGroups:
   - ""

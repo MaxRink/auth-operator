@@ -11,10 +11,12 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientgodiscovery "k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 
 	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	authorizationcontroller "github.com/telekom/auth-operator/internal/controller/authorization"
+	"github.com/telekom/auth-operator/pkg/capabilities"
 	"github.com/telekom/auth-operator/pkg/discovery"
 	"github.com/telekom/auth-operator/pkg/indexer"
 	"github.com/telekom/auth-operator/pkg/system"
@@ -163,11 +165,22 @@ and their status is kept up to date.`,
 		}
 		setupLog.Info("field indexes configured for cached client")
 
-		// Build reconciler options (tracing)
+		// Build reconciler options (tracing, API server capability detection)
 		var reconcilerOpts []authorizationcontroller.ReconcilerOption
 		if tracingEnabled {
 			reconcilerOpts = append(reconcilerOpts,
 				authorizationcontroller.WithTracer(tracingProvider.Tracer()))
+		}
+
+		// Detect optional API server capabilities so constrained-impersonation grants
+		// that would be inert (feature gate off, or an API server older than 1.35) are
+		// surfaced on status instead of being silently reported as reconciled.
+		//
+		// Setup failures are non-fatal by design: the operator must keep working on
+		// clusters where the /metrics endpoint or the version endpoint is unreadable.
+		// In that case the ConstrainedImpersonationEffective condition reports Unknown.
+		if detector := buildCapabilityDetector(cfg); detector != nil {
+			reconcilerOpts = append(reconcilerOpts, authorizationcontroller.WithCapabilityDetector(detector))
 		}
 
 		if roleDefinitionConcurrency > 0 {
@@ -392,4 +405,37 @@ func validateConcurrency(flags map[string]int) error {
 		}
 	}
 	return nil
+}
+
+// buildCapabilityDetector assembles the API server capability detector used to
+// decide whether constrained impersonation (KEP-5284) grants are effective.
+//
+// It intentionally never returns an error: every component is optional and a
+// partially configured detector still produces a useful answer (a version-only
+// detector, for instance, infers the state from the release). Returning nil is
+// also safe — reconcilers then report the capability as Unknown.
+func buildCapabilityDetector(cfg *rest.Config) *capabilities.Detector {
+	if cfg == nil {
+		return nil
+	}
+
+	detector := &capabilities.Detector{}
+
+	if fetcher, err := capabilities.NewRESTMetricsFetcher(cfg); err != nil {
+		setupLog.V(1).Info("API server /metrics capability probe unavailable; "+
+			"constrained impersonation support will be inferred from the server version", "error", err.Error())
+	} else {
+		detector.Metrics = fetcher
+	}
+
+	if discoveryClient, err := clientgodiscovery.NewDiscoveryClientForConfig(cfg); err != nil {
+		setupLog.V(1).Info("API server version lookup unavailable for capability detection", "error", err.Error())
+	} else {
+		detector.Version = discoveryClient
+	}
+
+	if detector.Metrics == nil && detector.Version == nil {
+		return nil
+	}
+	return detector
 }

@@ -330,3 +330,42 @@ const (
 	// DeprovisionedReason is the reason when resources are deprovisioned due to policy violations.
 	DeprovisionedReason AuthZConditionReason = "Deprovisioned"
 )
+
+// ConstrainedImpersonation condition constants.
+//
+// The condition exists because a constrained-impersonation grant is a
+// silent-no-privilege failure mode: an API server without the
+// ConstrainedImpersonation feature gate happily accepts a ClusterRole containing
+// `impersonate:user-info` verbs and `authentication.k8s.io` identity resources,
+// but never matches them. Reconciliation would otherwise report success while
+// granting nothing.
+const (
+	// ConstrainedImpersonationCondition reports whether a generated
+	// constrained-impersonation grant is actually effective on this cluster.
+	ConstrainedImpersonationCondition AuthZConditionType = "ConstrainedImpersonationEffective"
+
+	// ConstrainedImpersonationReasonEffective indicates the feature gate is enabled
+	// and the generated grants are live.
+	ConstrainedImpersonationReasonEffective AuthZConditionReason = "FeatureGateEnabled"
+	// ConstrainedImpersonationMessageEffective is the message when grants are live.
+	ConstrainedImpersonationMessageEffective AuthZConditionMessage = "Constrained impersonation grants are effective: %s"
+
+	// ConstrainedImpersonationReasonInert indicates the generated grants exist but
+	// are never matched because the API server does not have the feature enabled.
+	ConstrainedImpersonationReasonInert AuthZConditionReason = "FeatureGateDisabled"
+	// ConstrainedImpersonationMessageInert is the message when grants are inert.
+	ConstrainedImpersonationMessageInert AuthZConditionMessage = "Constrained impersonation grants are INERT and grant nothing: %s"
+
+	// ConstrainedImpersonationReasonUnknown indicates the operator could not
+	// determine whether the feature is enabled.
+	ConstrainedImpersonationReasonUnknown AuthZConditionReason = "FeatureStateUnknown"
+	// ConstrainedImpersonationMessageUnknown is the message when the state is unknown.
+	ConstrainedImpersonationMessageUnknown AuthZConditionMessage = "Constrained impersonation support could not be determined: %s"
+
+	// ConstrainedImpersonationReasonLegacyFallback indicates the definition also
+	// grants the legacy blanket "impersonate" verb, which wins by fallback and
+	// silently defeats every constraint expressed by the grant.
+	ConstrainedImpersonationReasonLegacyFallback AuthZConditionReason = "LegacyFallbackReachable"
+	// ConstrainedImpersonationMessageLegacyFallback is the message for a reachable legacy fallback.
+	ConstrainedImpersonationMessageLegacyFallback AuthZConditionMessage = "The legacy blanket \"impersonate\" verb is not restricted, so it wins by fallback and silently defeats the constrained impersonation grant: %s"
+)

@@ -226,7 +226,7 @@ jobs:
             while IFS= read -r policy; do
               [ -n "$policy" ] || continue
               case "$policy" in
-                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings)
+                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings|sample-policy-constrained-impersonation)
                   ;;
                 *)
                   echo "::error::Restricted sample policyRef $policy has no output-delta requester mapping"
@@ -261,6 +261,14 @@ jobs:
           apply_policy_docs sample-policy-block-clusterrolebindings \
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
+            --as=output-delta-unassigned
+          # sample-policy-constrained-impersonation declares no defaultAssignment,
+          # so its requester must be an identity that no OTHER policy claims:
+          # the default-policy-assignment webhook pins each assigned requester to
+          # its own policy and rejects any other policyRef. output-delta-unassigned
+          # exists for exactly this case and is already a requester subject above.
+          # (subjectLimits.allowedKinds constrains spec.subjects, not the requester.)
+          apply_policy_docs sample-policy-constrained-impersonation \
             --as=output-delta-unassigned
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh
@@ -662,7 +670,7 @@ jobs:
             while IFS= read -r policy; do
               [ -n "$policy" ] || continue
               case "$policy" in
-                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings)
+                team-workload-policy|operator-cross-namespace-policy|cicd-pipeline-policy|sample-policy-allow-all-paths|sample-policy-impersonation-authz-failure|sample-policy-block-clusterrolebindings|sample-policy-partially-allowed-bindings|sample-policy-constrained-impersonation)
                   ;;
                 *)
                   echo "::error::Restricted sample policyRef $policy has no output-delta requester mapping"
@@ -697,6 +705,14 @@ jobs:
           apply_policy_docs sample-policy-block-clusterrolebindings \
             --as=output-delta-unassigned
           apply_policy_docs sample-policy-partially-allowed-bindings \
+            --as=output-delta-unassigned
+          # sample-policy-constrained-impersonation declares no defaultAssignment,
+          # so its requester must be an identity that no OTHER policy claims:
+          # the default-policy-assignment webhook pins each assigned requester to
+          # its own policy and rejects any other policyRef. output-delta-unassigned
+          # exists for exactly this case and is already a requester subject above.
+          # (subjectLimits.allowedKinds constrains spec.subjects, not the requester.)
+          apply_policy_docs sample-policy-constrained-impersonation \
             --as=output-delta-unassigned
           SCRIPT
           chmod +x /tmp/apply-output-delta-samples.sh

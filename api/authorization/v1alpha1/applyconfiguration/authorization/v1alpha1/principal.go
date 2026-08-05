@@ -30,6 +30,16 @@ type PrincipalApplyConfiguration struct {
 	// User may be either the short ServiceAccount name or the full
 	// system:serviceaccount:<namespace>:<name> username.
 	Namespace *string `json:"namespace,omitempty"`
+	// UID matches SubjectAccessReview spec.uid, the UID of the authenticated
+	// requester. Matching on UID pins a principal to one specific identity instance
+	// even when usernames are reused, which matters for constrained impersonation
+	// because the requester's UID is part of the impersonation authorization check.
+	UID *string `json:"uid,omitempty"`
+	// Extra matches SubjectAccessReview spec.extra entries. All listed matchers must
+	// match (AND) for the principal to match. This makes attributes such as
+	// authentication.kubernetes.io/node-name — the value the associated-node
+	// impersonation mode is keyed on — usable in authorization decisions.
+	Extra []PrincipalExtraMatchApplyConfiguration `json:"extra,omitempty"`
 }
 
 // PrincipalApplyConfiguration constructs a declarative configuration of the Principal type for use with
@@ -61,5 +71,26 @@ func (b *PrincipalApplyConfiguration) WithGroups(values ...string) *PrincipalApp
 // If called multiple times, the Namespace field is set to the value of the last call.
 func (b *PrincipalApplyConfiguration) WithNamespace(value string) *PrincipalApplyConfiguration {
 	b.Namespace = &value
+	return b
+}
+
+// WithUID sets the UID field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UID field is set to the value of the last call.
+func (b *PrincipalApplyConfiguration) WithUID(value string) *PrincipalApplyConfiguration {
+	b.UID = &value
+	return b
+}
+
+// WithExtra adds the given value to the Extra field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Extra field.
+func (b *PrincipalApplyConfiguration) WithExtra(values ...*PrincipalExtraMatchApplyConfiguration) *PrincipalApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithExtra")
+		}
+		b.Extra = append(b.Extra, *values[i])
+	}
 	return b
 }

@@ -152,6 +152,193 @@ spec:
                   or "false" based on this field's value.
                   Only applicable when TargetRole is ClusterRole. Defaults to false.
                 type: boolean
+              constrainedImpersonation:
+                description: |-
+                  ConstrainedImpersonation declares a Kubernetes constrained impersonation
+                  (KEP-5284) grant using a typed API instead of hand-written magic verb
+                  strings. The controller appends the generated PolicyRules — identity rules in
+                  the authentication.k8s.io API group with `impersonate:<mode>` verbs, and
+                  action rules with `impersonate-on:<mode>:<verb>` verbs — to the discovery
+                  derived rules of the target role.
+
+                  The feature requires the ConstrainedImpersonation kube-apiserver feature gate
+                  (alpha 1.35 off-by-default, beta 1.36 on-by-default). On an older apiserver
+                  the generated grants are simply never matched, so the change fails safe.
+
+                  Mutually exclusive with AggregateFrom, whose rules are owned by the
+                  Kubernetes aggregation controller.
+                properties:
+                  actions:
+                    description: |-
+                      Actions are the action rules describing which requests may be made while
+                      impersonating. They generate PolicyRules with `impersonate-on:<mode>:<verb>`
+                      verbs against the target resources.
+
+                      An empty Actions list produces an identity-only grant, which by itself
+                      authorizes nothing: the apiserver runs the action check FIRST and falls back
+                      to legacy impersonation when it fails. Admission emits a warning in that case.
+                    items:
+                      description: |-
+                        ImpersonationActionRule grants permission to perform specific verbs on specific
+                        target resources *while* impersonating in the declared mode. Each rule becomes
+                        one RBAC PolicyRule carrying `impersonate-on:<mode>:<verb>` verbs against the
+                        target request's own API group, resource and namespace — there is no group
+                        override, so apiGroups/resources describe the impersonated request's target.
+                      properties:
+                        apiGroups:
+                          description: |-
+                            APIGroups are the target API groups. Use "" for the core group and "*" for
+                            all groups.
+                          items:
+                            maxLength: 253
+                            type: string
+                          maxItems: 32
+                          minItems: 1
+                          type: array
+                        resourceNames:
+                          description: ResourceNames optionally restricts the target
+                            resource names.
+                          items:
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          maxItems: 64
+                          type: array
+                        resources:
+                          description: |-
+                            Resources are the target resources, optionally with a subresource
+                            ("pods/log"). Use "*" for all resources.
+                          items:
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          maxItems: 64
+                          minItems: 1
+                          type: array
+                        verbs:
+                          description: |-
+                            Verbs are the *underlying* request verbs, e.g. ["get", "list", "watch"].
+                            The operator rewrites each entry to `impersonate-on:<mode>:<verb>`; do not
+                            pre-encode the prefix here.
+
+                            The apiserver has no prefix wildcard for action verbs: "*" is accepted by
+                            RBAC as a full wildcard, but "impersonate-on:<mode>:*" is not a thing.
+                            Passing "*" therefore emits the bare "*" verb, which grants every verb
+                            including plain (non-impersonated) access, so it is rejected by validation.
+                          items:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z][a-z0-9]*$
+                            type: string
+                          maxItems: 32
+                          minItems: 1
+                          type: array
+                      required:
+                      - apiGroups
+                      - resources
+                      - verbs
+                      type: object
+                    maxItems: 32
+                    type: array
+                  identities:
+                    description: |-
+                      Identities are the identity allowlist rules. They generate cluster-scoped
+                      PolicyRules in the authentication.k8s.io API group with the
+                      `impersonate:<mode>` verb.
+                    items:
+                      description: |-
+                        ImpersonationIdentityRule grants permission to assume a specific class of
+                        identity while impersonating. Each rule becomes one RBAC PolicyRule in the
+                        authentication.k8s.io API group carrying the `impersonate:<mode>` verb.
+
+                        Identity rules for users, groups, uids, userextras and nodes are cluster-scoped
+                        and therefore require a ClusterRole target. Only serviceaccounts identity rules
+                        may be expressed from a namespaced Role.
+                      properties:
+                        extraKey:
+                          description: |-
+                            ExtraKey is the domain-prefixed extra key when Resource is "userextras".
+                            It becomes the RBAC subresource, producing resources: ["userextras/<key>"].
+                            Must be lowercase and a valid domain-prefixed path, matching the apiserver's
+                            own validateExtra() checks. Required for userextras, forbidden otherwise.
+                          maxLength: 253
+                          type: string
+                        names:
+                          description: |-
+                            Names is the allowlist written to the PolicyRule's resourceNames. Values are
+                            usernames, group names, UIDs, ServiceAccount names, node names or extra
+                            values depending on Resource. "*" grants every name for this resource.
+
+                            Leave empty only for the associated-node mode, where the apiserver performs
+                            the node association check itself and the rule intentionally carries no
+                            resourceNames. For every other mode an empty Names list would grant
+                            unrestricted impersonation and is rejected.
+                          items:
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          maxItems: 64
+                          type: array
+                        resource:
+                          description: Resource is the identity resource this rule
+                            grants against.
+                          enum:
+                          - users
+                          - groups
+                          - uids
+                          - userextras
+                          - serviceaccounts
+                          - nodes
+                          type: string
+                      required:
+                      - resource
+                      type: object
+                    maxItems: 32
+                    minItems: 1
+                    type: array
+                  mode:
+                    description: Mode selects the constrained impersonation mode the
+                      generated verbs target.
+                    enum:
+                    - user-info
+                    - serviceaccount
+                    - arbitrary-node
+                    - associated-node
+                    type: string
+                required:
+                - identities
+                - mode
+                type: object
+                x-kubernetes-validations:
+                - message: associated-node identity rules must not set names; the
+                    apiserver performs the node association check itself
+                  rule: self.mode != 'associated-node' || !self.identities.exists(r,
+                    has(r.names) && size(r.names) > 0)
+                - message: associated-node mode only supports the 'nodes' identity
+                    resource
+                  rule: self.mode != 'associated-node' || self.identities.all(r, r.resource
+                    == 'nodes')
+                - message: arbitrary-node mode only supports the 'nodes' identity
+                    resource
+                  rule: self.mode != 'arbitrary-node' || self.identities.all(r, r.resource
+                    == 'nodes')
+                - message: serviceaccount mode only supports the 'serviceaccounts'
+                    identity resource
+                  rule: self.mode != 'serviceaccount' || self.identities.all(r, r.resource
+                    == 'serviceaccounts')
+                - message: user-info mode must not use the 'nodes' or 'serviceaccounts'
+                    identity resources; those buckets are reserved for the node and
+                    serviceaccount modes
+                  rule: self.mode != 'user-info' || self.identities.all(r, r.resource
+                    != 'nodes' && r.resource != 'serviceaccounts')
+                - message: extraKey is required for the 'userextras' identity resource
+                    and forbidden for all others
+                  rule: 'self.identities.all(r, r.resource == ''userextras'' ? (has(r.extraKey)
+                    && size(r.extraKey) > 0) : (!has(r.extraKey) || size(r.extraKey)
+                    == 0))'
+                - message: impersonating the system:masters group is not allowed
+                  rule: '!self.identities.exists(r, r.resource == ''groups'' && has(r.names)
+                    && r.names.exists(n, n == ''system:masters''))'
               metricsAccessAllowed:
                 default: false
                 description: |-
@@ -192,12 +379,17 @@ spec:
                         in this group — remaining verbs are still allowed.
                         This enables per-API-group read-only restrictions without enumerating every resource.
                         A verb value of "*" restricts all discovered verbs in this API group.
+
+                        Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+                        i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+                        bare "impersonate" verb. Because every mode x verb combination is a separate
+                        entry, MaxItems is 64 rather than the historical 16.
                       items:
                         maxLength: 63
                         minLength: 1
-                        pattern: ^([a-z]+|\*)$
+                        pattern: ^([a-z]+|\*|impersonate:(user-info|serviceaccount|arbitrary-node|associated-node)|impersonate-on:(user-info|serviceaccount|arbitrary-node|associated-node):[a-z]+)$
                         type: string
-                      maxItems: 16
+                      maxItems: 64
                       type: array
                     versions:
                       description: |-
@@ -307,12 +499,17 @@ spec:
                   RestrictedVerbs holds all verbs which will *NOT* be reconciled into the "TargetRole".
                   The RBAC operator discovers all resource verbs available and removes those listed here.
                   A value of "*" restricts all discovered verbs.
+
+                  Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+                  i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+                  bare "impersonate" verb. Because every mode x verb combination is a separate
+                  entry, MaxItems is 64 rather than the historical 16.
                 items:
                   maxLength: 63
                   minLength: 1
-                  pattern: ^([a-z]+|\*)$
+                  pattern: ^([a-z]+|\*|impersonate:(user-info|serviceaccount|arbitrary-node|associated-node)|impersonate-on:(user-info|serviceaccount|arbitrary-node|associated-node):[a-z]+)$
                   type: string
-                maxItems: 16
+                maxItems: 64
                 type: array
               scopeNamespaced:
                 description: |-

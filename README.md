@@ -337,6 +337,7 @@ For detailed development instructions, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Reference
 - **[API Reference](./docs/api-reference/authorization.t-caas.telekom.com.md)** — Full CRD specification
+- **[Constrained Impersonation](./docs/constrained-impersonation.md)** — Kubernetes KEP-5284 support: typed API, modes, guardrails, and the version compatibility matrix
 - **[SSA Architecture](./docs/ssa-architecture.md)** — Server-Side Apply patterns, field ownership, and conflict resolution
 - **[Condition Lifecycle](./docs/condition-lifecycle.md)** — Condition types, state transitions, and kstatus compliance
 - **[Helm Chart](./chart/auth-operator/README.md)** — Helm installation and configuration

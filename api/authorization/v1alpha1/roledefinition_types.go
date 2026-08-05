@@ -25,11 +25,16 @@ type RestrictedAPIGroup struct {
 	// in this group — remaining verbs are still allowed.
 	// This enables per-API-group read-only restrictions without enumerating every resource.
 	// A verb value of "*" restricts all discovered verbs in this API group.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=63
-	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*)$`
+	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*|impersonate:(user-info|serviceaccount|arbitrary-node|associated-node)|impersonate-on:(user-info|serviceaccount|arbitrary-node|associated-node):[a-z]+)$`
 	Verbs []string `json:"verbs,omitempty"`
 }
 
@@ -103,11 +108,16 @@ type RoleDefinitionSpec struct {
 	// RestrictedVerbs holds all verbs which will *NOT* be reconciled into the "TargetRole".
 	// The RBAC operator discovers all resource verbs available and removes those listed here.
 	// A value of "*" restricts all discovered verbs.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=63
-	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*)$`
+	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*|impersonate:(user-info|serviceaccount|arbitrary-node|associated-node)|impersonate-on:(user-info|serviceaccount|arbitrary-node|associated-node):[a-z]+)$`
 	RestrictedVerbs []string `json:"restrictedVerbs,omitempty"`
 
 	// BreakglassAllowed marks generated ClusterRoles as eligible for temporary
@@ -143,6 +153,22 @@ type RoleDefinitionSpec struct {
 	// Only applicable when targetRole is ClusterRole.
 	// +kubebuilder:validation:Optional
 	AggregateFrom *rbacv1.AggregationRule `json:"aggregateFrom,omitempty"`
+
+	// ConstrainedImpersonation declares a Kubernetes constrained impersonation
+	// (KEP-5284) grant using a typed API instead of hand-written magic verb
+	// strings. The controller appends the generated PolicyRules — identity rules in
+	// the authentication.k8s.io API group with `impersonate:<mode>` verbs, and
+	// action rules with `impersonate-on:<mode>:<verb>` verbs — to the discovery
+	// derived rules of the target role.
+	//
+	// The feature requires the ConstrainedImpersonation kube-apiserver feature gate
+	// (alpha 1.35 off-by-default, beta 1.36 on-by-default). On an older apiserver
+	// the generated grants are simply never matched, so the change fails safe.
+	//
+	// Mutually exclusive with AggregateFrom, whose rules are owned by the
+	// Kubernetes aggregation controller.
+	// +kubebuilder:validation:Optional
+	ConstrainedImpersonation *ConstrainedImpersonationSpec `json:"constrainedImpersonation,omitempty"`
 }
 
 // RoleDefinitionStatus defines the observed state of RoleDefinition.

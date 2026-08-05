@@ -138,6 +138,10 @@ func evaluateRoleLimits(limits *authorizationv1alpha1.RoleLimits, rrd *authoriza
 		}
 	}
 
+	// Constrained impersonation grants are synthesised by the operator rather than
+	// derived from API discovery, so they need their own evaluation pass.
+	violations = append(violations, evaluateConstrainedImpersonation(limits, rrd)...)
+
 	return violations
 }
 

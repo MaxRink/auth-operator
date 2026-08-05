@@ -125,6 +125,63 @@ _Appears in:_
 | `clusterRoleRefs` _string array_ | ClusterRoleRefs references an existing ClusterRole |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
 
 
+#### ConstrainedImpersonationLimits
+
+
+
+ConstrainedImpersonationLimits constrains Kubernetes constrained impersonation
+(KEP-5284) grants that RestrictedRoleDefinitions may declare.
+
+This complements RoleLimits.ForbiddenVerbs and
+RoleLimits.ForbiddenResourceVerbs, which can also match generated
+`impersonate:<mode>` / `impersonate-on:<mode>:<verb>` verbs directly. The
+dedicated block exists because the generated verbs are synthesised by the
+operator rather than authored by the tenant, so a verb-string denylist alone is
+easy to bypass by choosing a different mode.
+
+
+
+_Appears in:_
+- [RoleLimits](#rolelimits)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `allowed` _boolean_ | Allowed enables constrained impersonation grants under this policy.<br />Defaults to false (deny by default). | false | Optional: \{\} <br /> |
+| `allowedModes` _[ImpersonationMode](#impersonationmode) array_ | AllowedModes restricts which impersonation modes may be used. An empty list<br />with allowed=true permits every mode. |  | Enum: [user-info serviceaccount arbitrary-node associated-node] <br />MaxItems: 4 <br />Optional: \{\} <br /> |
+| `allowedIdentityResources` _[ImpersonationIdentityResource](#impersonationidentityresource) array_ | AllowedIdentityResources restricts which identity resources may be granted.<br />An empty list with allowed=true permits every identity resource. |  | Enum: [users groups uids userextras serviceaccounts nodes] <br />MaxItems: 6 <br />Optional: \{\} <br /> |
+| `identityNameLimits` _[NameMatchLimits](#namematchlimits)_ | IdentityNameLimits constrains the identity names (resourceNames) a tenant may<br />list in identity rules, using the same allow/deny prefix and suffix semantics<br />as subject limits. |  | Optional: \{\} <br /> |
+| `forbiddenActionVerbs` _string array_ | ForbiddenActionVerbs lists underlying request verbs that must not appear in<br />action rules. Entries are the bare verbs (e.g. "delete"), not the<br />`impersonate-on:<mode>:` encoded form. |  | MaxItems: 32 <br />Optional: \{\} <br />items:MinLength: 1 <br /> |
+| `forbidLegacyFallback` _boolean_ | ForbidLegacyFallback requires that the RestrictedRoleDefinition also excludes<br />the legacy bare "impersonate" verb via restrictedVerbs. This closes knob #8 of<br />the KEP integration surface: a pre-existing blanket `impersonate` grant wins by<br />fallback and silently defeats every constraint expressed here. | false | Optional: \{\} <br /> |
+| `maxIdentityNames` _integer_ | MaxIdentityNames limits how many identity names a single grant may allowlist<br />across all identity rules. Nil means unlimited. |  | Minimum: 1 <br />Optional: \{\} <br /> |
+
+
+#### ConstrainedImpersonationSpec
+
+
+
+ConstrainedImpersonationSpec is the first-class, typed expression of a
+Kubernetes constrained impersonation (KEP-5284) grant. The operator translates
+it into the exact RBAC PolicyRules the apiserver expects, so operators do not
+need to hand-write magic verb strings such as "impersonate-on:user-info:list".
+
+IMPORTANT — grants union, they do not correlate. The effective permission is
+the full cross product of every granted identity and every granted action. It
+is not possible to express "userA only for pods AND userB only for secrets" in
+a single grant; use two separate RoleDefinitions bound to different subjects.
+
+
+
+_Appears in:_
+- [RestrictedRoleDefinitionSpec](#restrictedroledefinitionspec)
+- [RoleDefinitionSpec](#roledefinitionspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `mode` _[ImpersonationMode](#impersonationmode)_ | Mode selects the constrained impersonation mode the generated verbs target. |  | Enum: [user-info serviceaccount arbitrary-node associated-node] <br />Required: \{\} <br /> |
+| `identities` _[ImpersonationIdentityRule](#impersonationidentityrule) array_ | Identities are the identity allowlist rules. They generate cluster-scoped<br />PolicyRules in the authentication.k8s.io API group with the<br />`impersonate:<mode>` verb. |  | MaxItems: 32 <br />MinItems: 1 <br />Required: \{\} <br /> |
+| `actions` _[ImpersonationActionRule](#impersonationactionrule) array_ | Actions are the action rules describing which requests may be made while<br />impersonating. They generate PolicyRules with `impersonate-on:<mode>:<verb>`<br />verbs against the target resources.<br />An empty Actions list produces an identity-only grant, which by itself<br />authorizes nothing: the apiserver runs the action check FIRST and falls back<br />to legacy impersonation when it fails. Admission emits a warning in that case. |  | MaxItems: 32 <br />Optional: \{\} <br /> |
+
+
 #### DefaultPolicyAssignment
 
 
@@ -143,16 +200,49 @@ _Appears in:_
 | `serviceAccounts` _[SARef](#saref) array_ | ServiceAccounts lists requester ServiceAccounts for which this policy is the default. |  | MaxItems: 128 <br />Optional: \{\} <br /> |
 
 
+#### ImpersonationActionRule
+
+
+
+ImpersonationActionRule grants permission to perform specific verbs on specific
+target resources *while* impersonating in the declared mode. Each rule becomes
+one RBAC PolicyRule carrying `impersonate-on:<mode>:<verb>` verbs against the
+target request's own API group, resource and namespace — there is no group
+override, so apiGroups/resources describe the impersonated request's target.
+
+
+
+_Appears in:_
+- [ConstrainedImpersonationSpec](#constrainedimpersonationspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiGroups` _string array_ | APIGroups are the target API groups. Use "" for the core group and "*" for<br />all groups. |  | MaxItems: 32 <br />MinItems: 1 <br />Required: \{\} <br />items:MaxLength: 253 <br /> |
+| `resources` _string array_ | Resources are the target resources, optionally with a subresource<br />("pods/log"). Use "*" for all resources. |  | MaxItems: 64 <br />MinItems: 1 <br />Required: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
+| `resourceNames` _string array_ | ResourceNames optionally restricts the target resource names. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
+| `verbs` _string array_ | Verbs are the *underlying* request verbs, e.g. ["get", "list", "watch"].<br />The operator rewrites each entry to `impersonate-on:<mode>:<verb>`; do not<br />pre-encode the prefix here.<br />The apiserver has no prefix wildcard for action verbs: "*" is accepted by<br />RBAC as a full wildcard, but "impersonate-on:<mode>:*" is not a thing.<br />Passing "*" therefore emits the bare "*" verb, which grants every verb<br />including plain (non-impersonated) access, so it is rejected by validation. |  | MaxItems: 32 <br />MinItems: 1 <br />Required: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^[a-z][a-z0-9]*$` <br /> |
+
+
 #### ImpersonationConfig
 
 
 
-ImpersonationConfig controls apply-time ServiceAccount impersonation for
+ImpersonationConfig controls apply-time impersonation for
 RestrictedBindDefinition and RestrictedRoleDefinition reconciliation.
 RBACPolicy write access is a cluster trust boundary: a policy author can choose
-any ServiceAccount identity here, and admission only validates that the reference
-fields are non-empty. The impersonated ServiceAccount's own Kubernetes RBAC is
-the authoritative permission check during apply operations.
+any identity here, and admission only validates structural correctness. The
+impersonated identity's own Kubernetes RBAC is the authoritative permission
+check during apply operations.
+
+### The header-mixing trap (KEP-5284)
+
+The apiserver selects the `serviceaccount` and node constrained-impersonation
+modes only when the Impersonate-User header is the ONLY impersonation header
+set. Sending Impersonate-Uid, Impersonate-Group or Impersonate-Extra-* alongside
+a `system:serviceaccount:...` or `system:node:...` username silently skips those
+modes, falls through to `user-info` (which refuses node and ServiceAccount
+usernames) and finally to legacy impersonation. Admission therefore rejects
+combining ServiceAccountRef with UID, Groups or Extra.
 
 
 
@@ -161,8 +251,130 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enabled` _boolean_ | Enabled enables ServiceAccount impersonation during restricted resource apply operations. | false | Optional: \{\} <br /> |
-| `serviceAccountRef` _[SARef](#saref)_ | ServiceAccountRef is the ServiceAccount identity used for impersonated apply operations.<br />Required when enabled is true. Only platform administrators should be allowed<br />to configure this field because the operator does not perform a SubjectAccessReview<br />for the referenced identity at admission time. |  | Optional: \{\} <br /> |
+| `enabled` _boolean_ | Enabled enables impersonation during restricted resource apply operations. | false | Optional: \{\} <br /> |
+| `serviceAccountRef` _[SARef](#saref)_ | ServiceAccountRef is the ServiceAccount identity used for impersonated apply<br />operations, rendered as system:serviceaccount:<namespace>:<name>. Exactly one<br />of ServiceAccountRef or UserName is required when enabled is true.<br />Mutually exclusive with UID, Groups and Extra — see the header-mixing trap in<br />the type documentation. |  | Optional: \{\} <br /> |
+| `userName` _string_ | UserName is a raw impersonated username, used instead of ServiceAccountRef<br />when the apply identity is not a ServiceAccount. Combined with UID, Groups and<br />Extra this expresses the full `user-info` constrained-impersonation identity.<br />A `system:node:<name>` username is rejected: node impersonation forces<br />Groups=[system:nodes] and is not a meaningful apply identity for this operator. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
+| `uid` _string_ | UID is the impersonated UID, sent as the Impersonate-Uid header. Requires<br />UserName and is checked by the apiserver against<br />authentication.k8s.io/uids with the `impersonate:user-info` verb. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
+| `groups` _string array_ | Groups are the impersonated groups, sent as repeated Impersonate-Group<br />headers. Requires UserName. "system:masters" is rejected because constrained<br />impersonation hard-denies it.<br />Note: at four or more groups the apiserver first attempts a single wildcard<br />("*") group authorization check before falling back to per-group checks. |  | MaxItems: 32 <br />Optional: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
+| `extra` _[ImpersonationExtra](#impersonationextra) array_ | Extra are the impersonated extra values, sent as Impersonate-Extra-<key><br />headers. Requires UserName. |  | MaxItems: 16 <br />Optional: \{\} <br /> |
+| `mode` _[ImpersonationMode](#impersonationmode)_ | Mode records which constrained-impersonation mode the configured identity is<br />expected to select. It is advisory: the apiserver derives the mode from the<br />username and header set, it cannot be chosen by the client. Admission verifies<br />that the configured identity actually selects the declared mode, turning a<br />silent legacy fallback into an admission error. |  | Enum: [user-info serviceaccount arbitrary-node associated-node] <br />Optional: \{\} <br /> |
+
+
+#### ImpersonationExtra
+
+
+
+ImpersonationExtra is a single Impersonate-Extra-<key> entry used for
+apply-time impersonation.
+
+
+
+_Appears in:_
+- [ImpersonationConfig](#impersonationconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `key` _string_ | Key is the extra key. It must be a lowercase, domain-prefixed path, matching<br />the apiserver's constrained-impersonation validateExtra() rules. |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
+| `values` _string array_ | Values are the extra values for Key. At least one non-empty value is required;<br />the apiserver denies empty value lists and empty-string values. |  | MaxItems: 32 <br />MinItems: 1 <br />Required: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
+
+
+#### ImpersonationIdentityResource
+
+_Underlying type:_ _string_
+
+ImpersonationIdentityResource is the resource in the authentication.k8s.io API
+group that an identity rule grants against.
+
+_Validation:_
+- Enum: [users groups uids userextras serviceaccounts nodes]
+
+_Appears in:_
+- [ConstrainedImpersonationLimits](#constrainedimpersonationlimits)
+- [ImpersonationIdentityRule](#impersonationidentityrule)
+
+| Field | Description |
+| --- | --- |
+| `users` | ImpersonationResourceUsers matches a generic Impersonate-User value.<br /> |
+| `groups` | ImpersonationResourceGroups matches each Impersonate-Group value.<br /> |
+| `uids` | ImpersonationResourceUIDs matches the Impersonate-Uid value.<br /> |
+| `userextras` | ImpersonationResourceUserExtras matches Impersonate-Extra-<key> values. The<br />extra key becomes the RBAC subresource, i.e. "userextras/<key>".<br /> |
+| `serviceaccounts` | ImpersonationResourceServiceAccounts matches an Impersonate-User value of the<br />form system:serviceaccount:<ns>:<name>. This is the only identity resource<br />that may be granted from a namespaced Role.<br /> |
+| `nodes` | ImpersonationResourceNodes matches an Impersonate-User value of the form<br />system:node:<name>.<br /> |
+
+
+#### ImpersonationIdentityRule
+
+
+
+ImpersonationIdentityRule grants permission to assume a specific class of
+identity while impersonating. Each rule becomes one RBAC PolicyRule in the
+authentication.k8s.io API group carrying the `impersonate:<mode>` verb.
+
+Identity rules for users, groups, uids, userextras and nodes are cluster-scoped
+and therefore require a ClusterRole target. Only serviceaccounts identity rules
+may be expressed from a namespaced Role.
+
+
+
+_Appears in:_
+- [ConstrainedImpersonationSpec](#constrainedimpersonationspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `resource` _[ImpersonationIdentityResource](#impersonationidentityresource)_ | Resource is the identity resource this rule grants against. |  | Enum: [users groups uids userextras serviceaccounts nodes] <br />Required: \{\} <br /> |
+| `extraKey` _string_ | ExtraKey is the domain-prefixed extra key when Resource is "userextras".<br />It becomes the RBAC subresource, producing resources: ["userextras/<key>"].<br />Must be lowercase and a valid domain-prefixed path, matching the apiserver's<br />own validateExtra() checks. Required for userextras, forbidden otherwise. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
+| `names` _string array_ | Names is the allowlist written to the PolicyRule's resourceNames. Values are<br />usernames, group names, UIDs, ServiceAccount names, node names or extra<br />values depending on Resource. "*" grants every name for this resource.<br />Leave empty only for the associated-node mode, where the apiserver performs<br />the node association check itself and the rule intentionally carries no<br />resourceNames. For every other mode an empty Names list would grant<br />unrestricted impersonation and is rejected. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
+
+
+#### ImpersonationMode
+
+_Underlying type:_ _string_
+
+ImpersonationMode selects one of the constrained impersonation modes defined by
+KEP-5284. The mode is derived by the apiserver from the Impersonate-User header
+value; this field declares which mode the generated RBAC grant targets.
+
+_Validation:_
+- Enum: [user-info serviceaccount arbitrary-node associated-node]
+
+_Appears in:_
+- [ConstrainedImpersonationLimits](#constrainedimpersonationlimits)
+- [ConstrainedImpersonationSpec](#constrainedimpersonationspec)
+- [ImpersonationConfig](#impersonationconfig)
+- [ParsedImpersonationVerb](#parsedimpersonationverb)
+
+| Field | Description |
+| --- | --- |
+| `associated-node` | ImpersonationModeAssociatedNode allows a requesting ServiceAccount to<br />impersonate only the node it is scheduled on. Identity rules take no names.<br /> |
+| `arbitrary-node` | ImpersonationModeArbitraryNode allows impersonating any system:node:<name>.<br /> |
+| `serviceaccount` | ImpersonationModeServiceAccount allows impersonating system:serviceaccount:<ns>:<name>.<br /> |
+| `user-info` | ImpersonationModeUserInfo allows impersonating any non-node, non-ServiceAccount<br />identity, including uid, groups and extra values.<br /> |
+
+
+#### ImpersonationVerbPolicy
+
+_Underlying type:_ _string_
+
+ImpersonationVerbPolicy selects how an authorizer handles constrained
+impersonation verbs.
+
+KEP-5284 explicitly warns that "a permissive webhook that allows unknown verbs
+silently grants constrained impersonation". Because Kubernetes RBAC treats
+verbs: ["*"] as matching every verb — including `impersonate:user-info` — any
+pre-existing wildcard allow rule becomes an unintended impersonation grant when
+the feature gate is enabled.
+
+_Validation:_
+- Enum: [RequireExplicitVerb AllowWildcard Deny]
+
+_Appears in:_
+- [WebhookAuthorizerSpec](#webhookauthorizerspec)
+
+| Field | Description |
+| --- | --- |
+| `RequireExplicitVerb` | ImpersonationVerbPolicyRequireExplicitVerb (the default) means a constrained<br />impersonation verb only matches a rule that lists it literally. A rule with<br />verbs: ["*"] does NOT match `impersonate:user-info`. This is fail-safe and<br />keeps existing wildcard rules from silently widening.<br /> |
+| `AllowWildcard` | ImpersonationVerbPolicyAllowWildcard restores plain Kubernetes RBAC<br />semantics, where verbs: ["*"] matches constrained impersonation verbs too.<br />Only use this on authorizers whose rules are known to be narrow.<br /> |
+| `Deny` | ImpersonationVerbPolicyDeny makes this authorizer return an explicit deny for<br />any request carrying a constrained impersonation verb that matches its rules,<br />regardless of the allowed principals. Use it as a cluster-wide kill switch for<br />constrained impersonation.<br />Rule matching uses plain RBAC semantics, so verbs: ["*"] DOES match every<br />impersonation verb here. This differs from RequireExplicitVerb on purpose:<br />ignoring "*" is fail-safe when granting but fail-open when denying, and a kill<br />switch written as verbs: ["*"] must not silently match nothing.<br /> |
 
 
 
@@ -176,6 +388,7 @@ NameMatchLimits defines name-based allow/deny patterns for subjects.
 
 
 _Appears in:_
+- [ConstrainedImpersonationLimits](#constrainedimpersonationlimits)
 - [SubjectLimits](#subjectlimits)
 
 | Field | Description | Default | Validation |
@@ -227,6 +440,8 @@ _Appears in:_
 | `maxTargetNamespaces` _integer_ | MaxTargetNamespaces limits the number of target namespaces per binding. |  | Minimum: 0 <br />Optional: \{\} <br /> |
 
 
+
+
 #### PolicyScope
 
 
@@ -260,6 +475,28 @@ _Appears in:_
 | `user` _string_ | User is the requesting user in SubjectAccessReview request. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
 | `groups` _string array_ | Groups is the requesting user groups in SubjectAccessReview request. |  | MaxItems: 256 <br />Optional: \{\} <br /> |
 | `namespace` _string_ | Namespace scopes User to a Kubernetes ServiceAccount namespace. When set,<br />User may be either the short ServiceAccount name or the full<br />system:serviceaccount:<namespace>:<name> username. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
+| `uid` _string_ | UID matches SubjectAccessReview spec.uid, the UID of the authenticated<br />requester. Matching on UID pins a principal to one specific identity instance<br />even when usernames are reused, which matters for constrained impersonation<br />because the requester's UID is part of the impersonation authorization check. |  | MaxLength: 253 <br />Optional: \{\} <br /> |
+| `extra` _[PrincipalExtraMatch](#principalextramatch) array_ | Extra matches SubjectAccessReview spec.extra entries. All listed matchers must<br />match (AND) for the principal to match. This makes attributes such as<br />authentication.kubernetes.io/node-name — the value the associated-node<br />impersonation mode is keyed on — usable in authorization decisions. |  | MaxItems: 16 <br />Optional: \{\} <br /> |
+
+
+#### PrincipalExtraMatch
+
+
+
+PrincipalExtraMatch matches a single SubjectAccessReview spec.extra entry.
+The apiserver populates spec.extra from the authenticated requester's extra
+values, including impersonation-related keys such as
+authentication.kubernetes.io/node-name.
+
+
+
+_Appears in:_
+- [Principal](#principal)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `key` _string_ | Key is the extra key to match, e.g. "authentication.kubernetes.io/node-name". |  | MaxLength: 253 <br />MinLength: 1 <br />Required: \{\} <br /> |
+| `values` _string array_ | Values are the accepted values for Key. The principal matches when at least<br />one of the request's values for Key is listed here. Use ["*"] to require only<br />that the key is present with any non-empty value. |  | MaxItems: 64 <br />MinItems: 1 <br />Required: \{\} <br />items:MaxLength: 253 <br />items:MinLength: 1 <br /> |
 
 
 #### RBACPolicy
@@ -378,7 +615,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ | Name is the name of the API group (e.g., "storage.k8s.io", "velero.io"). |  | Required: \{\} <br /> |
 | `versions` _[GroupVersionForDiscovery](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#groupversionfordiscovery-v1-meta) array_ | Versions restricts only the specified API versions within this group.<br />When empty, all versions of the group are affected. |  | Optional: \{\} <br /> |
-| `verbs` _string array_ | Verbs restricts only the specified verbs across all resources in this API group.<br />When empty, the entire API group is fully blocked (existing behavior).<br />When specified, only the listed verbs are removed from the generated role for resources<br />in this group — remaining verbs are still allowed.<br />This enables per-API-group read-only restrictions without enumerating every resource.<br />A verb value of "*" restricts all discovered verbs in this API group. |  | MaxItems: 16 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*)$` <br /> |
+| `verbs` _string array_ | Verbs restricts only the specified verbs across all resources in this API group.<br />When empty, the entire API group is fully blocked (existing behavior).<br />When specified, only the listed verbs are removed from the generated role for resources<br />in this group — remaining verbs are still allowed.<br />This enables per-API-group read-only restrictions without enumerating every resource.<br />A verb value of "*" restricts all discovered verbs in this API group.<br />Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,<br />i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy<br />bare "impersonate" verb. Because every mode x verb combination is a separate<br />entry, MaxItems is 64 rather than the historical 16. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*\|impersonate:(user-info\|serviceaccount\|arbitrary-node\|associated-node)\|impersonate-on:(user-info\|serviceaccount\|arbitrary-node\|associated-node):[a-z]+)$` <br /> |
 
 
 #### RestrictedBindDefinition
@@ -489,7 +726,8 @@ _Appears in:_
 | `scopeNamespaced` _boolean_ | ScopeNamespaced controls whether the API resource filter includes<br />namespaced or cluster-scoped resources. |  | Required: \{\} <br /> |
 | `restrictedApis` _[RestrictedAPIGroup](#restrictedapigroup) array_ | RestrictedAPIs defines API group-level restrictions for the generated role.<br />Each entry can either fully block an API group or restrict only certain verbs:<br />  - When Verbs is empty or omitted, the entire API group is fully blocked<br />    (no resources from that group appear in the generated role).<br />  - When Verbs is specified, only those verbs are removed for resources in<br />    the group — the remaining verbs are still allowed (partial restriction).<br />Version filtering narrows which API versions are affected:<br />  - When Versions is empty, all versions of the group are affected.<br />  - When Versions is specified, only those API versions are restricted.<br />Note: Kubernetes RBAC PolicyRules are version-agnostic. If the same resource<br />exists in a non-restricted version of the same group, it will still appear<br />in the generated role. |  | MaxItems: 64 <br />Optional: \{\} <br /> |
 | `restrictedResources` _[APIResource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#apiresource-v1-meta) array_ | RestrictedResources holds resources which will NOT be included in the generated role. |  | MaxItems: 128 <br />Optional: \{\} <br /> |
-| `restrictedVerbs` _string array_ | RestrictedVerbs holds verbs which will NOT be included in the generated role. |  | MaxItems: 16 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*)$` <br /> |
+| `restrictedVerbs` _string array_ | RestrictedVerbs holds verbs which will NOT be included in the generated role.<br />Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,<br />i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy<br />bare "impersonate" verb. Because every mode x verb combination is a separate<br />entry, MaxItems is 64 rather than the historical 16. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*\|impersonate:(user-info\|serviceaccount\|arbitrary-node\|associated-node)\|impersonate-on:(user-info\|serviceaccount\|arbitrary-node\|associated-node):[a-z]+)$` <br /> |
+| `constrainedImpersonation` _[ConstrainedImpersonationSpec](#constrainedimpersonationspec)_ | ConstrainedImpersonation declares a Kubernetes constrained impersonation<br />(KEP-5284) grant using a typed API instead of hand-written magic verb strings.<br />The controller appends the generated PolicyRules to the discovery-derived rules<br />of the generated role.<br />Unlike RoleDefinition, the grant is additionally checked against the governing<br />RBACPolicy: roleLimits.forbiddenVerbs and roleLimits.forbiddenResourceVerbs can<br />forbid `impersonate:*`-style grants, and<br />roleLimits.constrainedImpersonation can restrict the allowed modes, identity<br />resources and identity names. |  | Optional: \{\} <br /> |
 
 
 #### RestrictedRoleDefinitionStatus
@@ -554,11 +792,12 @@ _Appears in:_
 | `scopeNamespaced` _boolean_ | ScopeNamespaced controls whether the API resource is namespaced or not. This can also be checked by<br />running `kubectl api-resources --namespaced=true/false`. |  | Required: \{\} <br /> |
 | `restrictedApis` _[RestrictedAPIGroup](#restrictedapigroup) array_ | RestrictedAPIs defines API group-level restrictions for the generated role.<br />Each entry can either fully block an API group or restrict only certain verbs:<br />  - When Verbs is empty or omitted, the entire API group is fully blocked<br />    (no resources from that group appear in the generated role).<br />  - When Verbs is specified, only those verbs are removed for resources in<br />    the group — the remaining verbs are still allowed (partial restriction).<br />Version filtering narrows which API versions are affected:<br />  - When Versions is empty, all versions of the group are affected.<br />  - When Versions is specified, only those API versions are restricted.<br />Note: Kubernetes RBAC PolicyRules are version-agnostic. If the same resource<br />exists in a non-restricted version of the same group, it will still appear<br />in the generated role. |  | MaxItems: 64 <br />Optional: \{\} <br /> |
 | `restrictedResources` _[APIResource](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#apiresource-v1-meta) array_ | RestrictedResources holds all resources which will *NOT* be reconciled into the "TargetRole".<br />The RBAC operator discovers all API resources available and removes those listed here. |  | MaxItems: 128 <br />Optional: \{\} <br /> |
-| `restrictedVerbs` _string array_ | RestrictedVerbs holds all verbs which will *NOT* be reconciled into the "TargetRole".<br />The RBAC operator discovers all resource verbs available and removes those listed here.<br />A value of "*" restricts all discovered verbs. |  | MaxItems: 16 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*)$` <br /> |
+| `restrictedVerbs` _string array_ | RestrictedVerbs holds all verbs which will *NOT* be reconciled into the "TargetRole".<br />The RBAC operator discovers all resource verbs available and removes those listed here.<br />A value of "*" restricts all discovered verbs.<br />Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,<br />i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy<br />bare "impersonate" verb. Because every mode x verb combination is a separate<br />entry, MaxItems is 64 rather than the historical 16. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MaxLength: 63 <br />items:MinLength: 1 <br />items:Pattern: `^([a-z]+\|\*\|impersonate:(user-info\|serviceaccount\|arbitrary-node\|associated-node)\|impersonate-on:(user-info\|serviceaccount\|arbitrary-node\|associated-node):[a-z]+)$` <br /> |
 | `breakglassAllowed` _boolean_ | BreakglassAllowed marks generated ClusterRoles as eligible for temporary<br />privilege escalation via k8s-breakglass. The generated ClusterRole always<br />receives the label t-caas.telekom.com/breakglass-compatible set to "true"<br />or "false" based on this field's value.<br />Only applicable when TargetRole is ClusterRole. Defaults to false. | false | Optional: \{\} <br /> |
 | `metricsAccessAllowed` _boolean_ | MetricsAccessAllowed adds get access to the /metrics non-resource URL<br />on generated ClusterRoles. Only applicable when TargetRole is ClusterRole<br />and get is not restricted by RestrictedVerbs. Defaults to false. | false | Optional: \{\} <br /> |
 | `aggregationLabels` _object (keys:string, values:string)_ | AggregationLabels are additional labels applied to the generated ClusterRole.<br />Kubernetes RBAC aggregation labels such as rbac.authorization.k8s.io/aggregate-to-view<br />are rejected because generated roles must not feed built-in or externally managed<br />aggregating ClusterRoles. Only applicable when targetRole is ClusterRole. |  | Optional: \{\} <br /> |
 | `aggregateFrom` _[AggregationRule](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#aggregationrule-v1-rbac)_ | AggregateFrom generates an aggregating ClusterRole that uses label selectors<br />to compose rules from other ClusterRoles, instead of specifying rules directly.<br />When set, the controller skips API discovery and filtering; the generated ClusterRole<br />carries an aggregationRule and its rules[] are managed by the RBAC aggregation controller.<br />Selectors must use explicit matchLabels for t-caas.telekom.com/rbac-fragment="true"<br />and t-caas.telekom.com/aggregate-scope to avoid selecting system or unrelated ClusterRoles.<br />Mutually exclusive with RestrictedAPIs, RestrictedResources, and RestrictedVerbs.<br />Only applicable when targetRole is ClusterRole. |  | Optional: \{\} <br /> |
+| `constrainedImpersonation` _[ConstrainedImpersonationSpec](#constrainedimpersonationspec)_ | ConstrainedImpersonation declares a Kubernetes constrained impersonation<br />(KEP-5284) grant using a typed API instead of hand-written magic verb<br />strings. The controller appends the generated PolicyRules — identity rules in<br />the authentication.k8s.io API group with `impersonate:<mode>` verbs, and<br />action rules with `impersonate-on:<mode>:<verb>` verbs — to the discovery<br />derived rules of the target role.<br />The feature requires the ConstrainedImpersonation kube-apiserver feature gate<br />(alpha 1.35 off-by-default, beta 1.36 on-by-default). On an older apiserver<br />the generated grants are simply never matched, so the change fails safe.<br />Mutually exclusive with AggregateFrom, whose rules are owned by the<br />Kubernetes aggregation controller. |  | Optional: \{\} <br /> |
 
 
 #### RoleDefinitionStatus
@@ -595,11 +834,12 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `allowClusterRoles` _boolean_ | AllowClusterRoles controls whether ClusterRoles may be generated.<br />Default is false (deny by default). | false | Optional: \{\} <br /> |
-| `forbiddenVerbs` _string array_ | ForbiddenVerbs is a list of verbs that must not appear in generated roles. |  | MaxItems: 16 <br />Optional: \{\} <br />items:MinLength: 1 <br /> |
+| `forbiddenVerbs` _string array_ | ForbiddenVerbs is a list of verbs that must not appear in generated roles.<br />Constrained impersonation verbs may be listed here, either fully spelled out<br />("impersonate:user-info") or as a wildcard pattern ("impersonate:*",<br />"impersonate-on:*"). MaxItems is 64 because each constrained impersonation<br />mode x verb combination is a separate verb string. |  | MaxItems: 64 <br />Optional: \{\} <br />items:MinLength: 1 <br /> |
 | `forbiddenResources` _string array_ | ForbiddenResources is a list of resources that must not appear in generated roles. |  | MaxItems: 128 <br />Optional: \{\} <br />items:MinLength: 1 <br /> |
 | `forbiddenAPIGroups` _string array_ | ForbiddenAPIGroups is a list of API groups that must not appear in generated roles.<br />Use an empty string for the core API group. |  | MaxItems: 64 <br />Optional: \{\} <br /> |
 | `forbiddenResourceVerbs` _[ResourceVerbRule](#resourceverbrule) array_ | ForbiddenResourceVerbs is a list of specific resource+verb combinations that are forbidden. |  | MaxItems: 64 <br />Optional: \{\} <br /> |
 | `maxRulesPerRole` _integer_ | MaxRulesPerRole limits the number of rules in a single generated role. |  | Minimum: 1 <br />Optional: \{\} <br /> |
+| `constrainedImpersonation` _[ConstrainedImpersonationLimits](#constrainedimpersonationlimits)_ | ConstrainedImpersonation constrains Kubernetes constrained impersonation<br />(KEP-5284) grants declared by RestrictedRoleDefinitions governed by this<br />policy. When omitted, constrained impersonation grants are forbidden entirely<br />(deny by default) — a RestrictedRoleDefinition that sets<br />spec.constrainedImpersonation is reported as non-compliant. |  | Optional: \{\} <br /> |
 
 
 #### RoleRefLimits
@@ -735,6 +975,7 @@ _Appears in:_
 | `allowedPrincipals` _[Principal](#principal) array_ | AllowedPrincipals is a slice of principals this authorizer should allow. |  | MaxItems: 256 <br />Optional: \{\} <br /> |
 | `deniedPrincipals` _[Principal](#principal) array_ | DeniedPrincipals is a slice of principals this authorizer should deny<br />when the request also matches ResourceRules or NonResourceRules. |  | MaxItems: 256 <br />Optional: \{\} <br /> |
 | `namespaceSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#labelselector-v1-meta)_ | NamespaceSelector is a label selector to match namespaces that should allow the specified API calls. |  | Optional: \{\} <br /> |
+| `impersonationVerbPolicy` _[ImpersonationVerbPolicy](#impersonationverbpolicy)_ | ImpersonationVerbPolicy controls how this authorizer treats Kubernetes<br />constrained impersonation (KEP-5284) verbs — `impersonate:<mode>` and<br />`impersonate-on:<mode>:<verb>` — in resourceRules[].verbs.<br />Defaults to "RequireExplicitVerb", which is a deliberate hardening: a<br />pre-existing rule with verbs: ["*"] would otherwise silently start granting<br />constrained impersonation the moment the feature gate is on. See the<br />ImpersonationVerbPolicy type documentation for the full rationale. | RequireExplicitVerb | Enum: [RequireExplicitVerb AllowWildcard Deny] <br />Optional: \{\} <br /> |
 
 
 #### WebhookAuthorizerStatus

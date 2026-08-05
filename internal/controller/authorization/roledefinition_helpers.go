@@ -22,6 +22,7 @@ import (
 
 	authorizationv1alpha1 "github.com/telekom/auth-operator/api/authorization/v1alpha1"
 	"github.com/telekom/auth-operator/api/authorization/v1alpha1/applyconfiguration/ssa"
+	"github.com/telekom/auth-operator/pkg/capabilities"
 	"github.com/telekom/auth-operator/pkg/conditions"
 	"github.com/telekom/auth-operator/pkg/helpers"
 	"github.com/telekom/auth-operator/pkg/metrics"
@@ -664,4 +665,31 @@ func (r *RoleDefinitionReconciler) clearRoleRulesIfEmpty(
 		return fmt.Errorf("clearing empty desired Role rules: %w", err)
 	}
 	return nil
+}
+
+// recordConstrainedImpersonationState sets the ConstrainedImpersonationEffective
+// condition and emits a Warning event when the generated grant would be inert.
+//
+// Backwards compatibility: a ClusterRole carrying impersonate:<mode> verbs is
+// accepted by every API server version, but only an API server with the
+// ConstrainedImpersonation feature gate ever matches it. Without this signal the
+// RoleDefinition would report Ready=true while granting nothing at all.
+func (r *RoleDefinitionReconciler) recordConstrainedImpersonationState(
+	ctx context.Context,
+	roleDefinition *authorizationv1alpha1.RoleDefinition,
+) {
+	result := setConstrainedImpersonationCondition(
+		ctx,
+		roleDefinition,
+		roleDefinition.Generation,
+		roleDefinition.Spec.ConstrainedImpersonation,
+		roleDefinition.Spec.RestrictedVerbs,
+		r.capabilityDetector,
+	)
+	if roleDefinition.Spec.ConstrainedImpersonation == nil || result.State == capabilities.StateEnabled {
+		return
+	}
+	r.recorder.Eventf(roleDefinition, nil, corev1.EventTypeWarning,
+		authorizationv1alpha1.EventReasonCreation, authorizationv1alpha1.EventActionReconcile,
+		"Constrained impersonation grant may not be effective: %s", result.Detail)
 }

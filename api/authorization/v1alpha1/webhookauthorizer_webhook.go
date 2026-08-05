@@ -159,9 +159,14 @@ func validateWebhookAuthorizerPrincipals(wa *WebhookAuthorizer) (admission.Warni
 func validatePrincipalScopes(fieldName string, principals []Principal) error {
 	for i, p := range principals {
 		if p.Namespace == "" {
-			if p.User == "" && len(p.Groups) == 0 {
+			// A principal must carry at least one matcher, otherwise it matches every
+			// request. UID and extra matchers count: they let a principal be pinned to a
+			// specific identity instance or to a requester attribute such as
+			// authentication.kubernetes.io/node-name, which is what makes constrained
+			// impersonation decisions expressible.
+			if p.User == "" && len(p.Groups) == 0 && p.UID == "" && len(p.Extra) == 0 {
 				return apierrors.NewBadRequest(
-					fmt.Sprintf("spec.%s[%d] must specify user or at least one group", fieldName, i))
+					fmt.Sprintf("spec.%s[%d] must specify user, uid, at least one group, or at least one extra matcher", fieldName, i))
 			}
 			continue
 		}

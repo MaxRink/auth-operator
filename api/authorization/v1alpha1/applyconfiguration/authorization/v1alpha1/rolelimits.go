@@ -26,6 +26,10 @@ type RoleLimitsApplyConfiguration struct {
 	// Default is false (deny by default).
 	AllowClusterRoles *bool `json:"allowClusterRoles,omitempty"`
 	// ForbiddenVerbs is a list of verbs that must not appear in generated roles.
+	// Constrained impersonation verbs may be listed here, either fully spelled out
+	// ("impersonate:user-info") or as a wildcard pattern ("impersonate:*",
+	// "impersonate-on:*"). MaxItems is 64 because each constrained impersonation
+	// mode x verb combination is a separate verb string.
 	ForbiddenVerbs []string `json:"forbiddenVerbs,omitempty"`
 	// ForbiddenResources is a list of resources that must not appear in generated roles.
 	ForbiddenResources []string `json:"forbiddenResources,omitempty"`
@@ -36,6 +40,12 @@ type RoleLimitsApplyConfiguration struct {
 	ForbiddenResourceVerbs []ResourceVerbRuleApplyConfiguration `json:"forbiddenResourceVerbs,omitempty"`
 	// MaxRulesPerRole limits the number of rules in a single generated role.
 	MaxRulesPerRole *int32 `json:"maxRulesPerRole,omitempty"`
+	// ConstrainedImpersonation constrains Kubernetes constrained impersonation
+	// (KEP-5284) grants declared by RestrictedRoleDefinitions governed by this
+	// policy. When omitted, constrained impersonation grants are forbidden entirely
+	// (deny by default) — a RestrictedRoleDefinition that sets
+	// spec.constrainedImpersonation is reported as non-compliant.
+	ConstrainedImpersonation *ConstrainedImpersonationLimitsApplyConfiguration `json:"constrainedImpersonation,omitempty"`
 }
 
 // RoleLimitsApplyConfiguration constructs a declarative configuration of the RoleLimits type for use with
@@ -100,5 +110,13 @@ func (b *RoleLimitsApplyConfiguration) WithForbiddenResourceVerbs(values ...*Res
 // If called multiple times, the MaxRulesPerRole field is set to the value of the last call.
 func (b *RoleLimitsApplyConfiguration) WithMaxRulesPerRole(value int32) *RoleLimitsApplyConfiguration {
 	b.MaxRulesPerRole = &value
+	return b
+}
+
+// WithConstrainedImpersonation sets the ConstrainedImpersonation field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ConstrainedImpersonation field is set to the value of the last call.
+func (b *RoleLimitsApplyConfiguration) WithConstrainedImpersonation(value *ConstrainedImpersonationLimitsApplyConfiguration) *RoleLimitsApplyConfiguration {
+	b.ConstrainedImpersonation = value
 	return b
 }

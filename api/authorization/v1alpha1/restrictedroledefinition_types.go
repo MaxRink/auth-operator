@@ -73,12 +73,30 @@ type RestrictedRoleDefinitionSpec struct {
 	RestrictedResources []metav1.APIResource `json:"restrictedResources,omitempty"`
 
 	// RestrictedVerbs holds verbs which will NOT be included in the generated role.
+	//
+	// Kubernetes constrained impersonation (KEP-5284) verbs are accepted here too,
+	// i.e. "impersonate:<mode>" and "impersonate-on:<mode>:<verb>", plus the legacy
+	// bare "impersonate" verb. Because every mode x verb combination is a separate
+	// entry, MaxItems is 64 rather than the historical 16.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=63
-	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*)$`
+	// +kubebuilder:validation:items:Pattern=`^([a-z]+|\*|impersonate:(user-info|serviceaccount|arbitrary-node|associated-node)|impersonate-on:(user-info|serviceaccount|arbitrary-node|associated-node):[a-z]+)$`
 	RestrictedVerbs []string `json:"restrictedVerbs,omitempty"`
+
+	// ConstrainedImpersonation declares a Kubernetes constrained impersonation
+	// (KEP-5284) grant using a typed API instead of hand-written magic verb strings.
+	// The controller appends the generated PolicyRules to the discovery-derived rules
+	// of the generated role.
+	//
+	// Unlike RoleDefinition, the grant is additionally checked against the governing
+	// RBACPolicy: roleLimits.forbiddenVerbs and roleLimits.forbiddenResourceVerbs can
+	// forbid `impersonate:*`-style grants, and
+	// roleLimits.constrainedImpersonation can restrict the allowed modes, identity
+	// resources and identity names.
+	// +kubebuilder:validation:Optional
+	ConstrainedImpersonation *ConstrainedImpersonationSpec `json:"constrainedImpersonation,omitempty"`
 }
 
 // RestrictedRoleDefinitionStatus defines the observed state of RestrictedRoleDefinition.
