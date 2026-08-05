@@ -219,3 +219,194 @@ spec:
   scopeNamespaced: true
   restrictedVerbs:
     - delete
+
+---
+# =============================================================================
+# Constrained Impersonation (KEP-5284) runtime-failure cases
+# =============================================================================
+# All cases below are SCHEMA-VALID and therefore APPLY cleanly; they then stall
+# or report policy non-compliance at reconcile time. Schema/webhook-invalid
+# constrained-impersonation examples belong in
+# authorization_v1alpha1_negative_validation_cases.yaml instead, because they are
+# rejected at admission and would break `kubectl apply -k`.
+# =============================================================================
+
+---
+# CASE: constrained impersonation forbidden by policy (deny by default).
+# sample-policy-allow-all-paths has no roleLimits.constrainedImpersonation block,
+# so constrained impersonation is denied by default. The object applies, then
+# reconciliation reports a policy violation on spec.constrainedImpersonation.
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-case-ci-not-allowed-by-policy
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/sample-case: blocked-constrained-impersonation
+spec:
+  policyRef:
+    name: sample-policy-allow-all-paths
+  targetRole: ClusterRole
+  targetName: sample-ci-not-allowed
+  scopeNamespaced: false
+  restrictedVerbs:
+    - escalate
+    - impersonate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      - resource: users
+        names:
+          - sample-tenant-a-operator
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+        verbs:
+          - get
+
+---
+# CASE: constrained impersonation mode not on the policy allowlist.
+# sample-policy-constrained-impersonation permits only the user-info and
+# serviceaccount modes, so an arbitrary-node grant applies and then reports a
+# violation on spec.constrainedImpersonation.mode.
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-case-ci-mode-not-allowed
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/sample-case: blocked-constrained-impersonation-mode
+spec:
+  policyRef:
+    name: sample-policy-constrained-impersonation
+  targetRole: ClusterRole
+  targetName: sample-ci-mode-not-allowed
+  scopeNamespaced: false
+  restrictedVerbs:
+    - escalate
+    - impersonate
+  constrainedImpersonation:
+    mode: arbitrary-node
+    identities:
+      - resource: nodes
+        names:
+          - worker-01
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - nodes
+        verbs:
+          - get
+
+---
+# CASE: identity name outside the policy's identityNameLimits prefixes.
+# "intruder@example.com" matches neither "sample-tenant-" nor "oidc:sample-",
+# so the grant applies and then reports a policy violation.
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-case-ci-identity-name-not-allowed
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/sample-case: blocked-constrained-impersonation-identity
+spec:
+  policyRef:
+    name: sample-policy-constrained-impersonation
+  targetRole: ClusterRole
+  targetName: sample-ci-identity-not-allowed
+  scopeNamespaced: false
+  restrictedVerbs:
+    - escalate
+    - impersonate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      - resource: users
+        names:
+          - intruder@example.com
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+        verbs:
+          - get
+
+---
+# CASE: forbidden action verb.
+# The policy lists "delete" in forbiddenActionVerbs, so the generated
+# impersonate-on:user-info:delete verb is rejected at reconcile time.
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-case-ci-forbidden-action-verb
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/sample-case: blocked-constrained-impersonation-verb
+spec:
+  policyRef:
+    name: sample-policy-constrained-impersonation
+  targetRole: ClusterRole
+  targetName: sample-ci-forbidden-action-verb
+  scopeNamespaced: false
+  restrictedVerbs:
+    - escalate
+    - impersonate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      - resource: users
+        names:
+          - sample-tenant-a-operator
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+        verbs:
+          - get
+          - delete
+
+---
+# CASE: legacy impersonate fallback left reachable.
+# The policy sets forbidLegacyFallback=true, but restrictedVerbs omits the bare
+# "impersonate" verb, so the generated role can still carry the blanket legacy
+# grant that wins by fallback and silently defeats the constraint. The object
+# applies and then reports a policy violation.
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-case-ci-legacy-fallback-reachable
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/sample-case: blocked-constrained-impersonation-legacy
+spec:
+  policyRef:
+    name: sample-policy-constrained-impersonation
+  targetRole: ClusterRole
+  targetName: sample-ci-legacy-fallback
+  scopeNamespaced: false
+  # NOTE: "impersonate" is deliberately absent here.
+  restrictedVerbs:
+    - escalate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      - resource: users
+        names:
+          - sample-tenant-a-operator
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+        verbs:
+          - get

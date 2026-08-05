@@ -1,0 +1,399 @@
+# SPDX-FileCopyrightText: 2026 Deutsche Telekom AG
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# =============================================================================
+# Constrained Impersonation (KEP-5284) Samples
+# =============================================================================
+# These samples are VALID and apply cleanly. They cover every knob of the typed
+# spec.constrainedImpersonation API:
+#
+# - all four modes: user-info, serviceaccount, arbitrary-node, associated-node
+# - all six identity resources on authentication.k8s.io:
+#   users, groups, uids, userextras/<key>, serviceaccounts, nodes
+# - identity allowlists (resourceNames), action verbs, target resources
+# - ClusterRole (cluster-scoped identity resources) and Role (serviceaccounts only)
+# - RBACPolicy-governed delegated grants via RestrictedRoleDefinition
+#
+# Feature gate: ConstrainedImpersonation on kube-apiserver.
+#   alpha 1.35 (off by default), beta 1.36 (ON by default), GA planned 1.38.
+#
+# On an API server without the gate these grants are ACCEPTED but INERT: RBAC
+# verbs and resources are free-form strings, so nothing rejects them and nothing
+# matches them either. The operator surfaces that explicitly through the
+# ConstrainedImpersonationEffective condition rather than reporting success.
+# That is why these samples are valid everywhere and never fail to apply.
+#
+# Every sample also lists the legacy bare "impersonate" verb in restrictedVerbs.
+# This is deliberate and load-bearing: a blanket legacy `impersonate` grant wins
+# by fallback in the apiserver and silently defeats every constraint expressed
+# below. Without it the operator reports the condition as
+# reason=LegacyFallbackReachable.
+# =============================================================================
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRole: user-info mode — users + groups + uids + userextras
+# Use case: a support tool that may act as named human operators to read
+# workloads cluster-wide, but may never write.
+#
+# Demonstrates all four user-info identity resources in one grant, including the
+# userextras/<key> subresource form.
+#
+# NOTE (union, not correlated): the effective permission is the full cross
+# product of every identity below and every action below. It cannot express
+# "alice only for pods AND bob only for configmaps". Split into separate
+# RoleDefinitions when per-identity scoping is required.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RoleDefinition
+metadata:
+  name: rd-ci-user-info-support-reader
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/privilege-level: operator
+    t-caas.telekom.com/scope: cluster
+spec:
+  targetRole: ClusterRole
+  targetName: t-caas-ci-user-info-support-reader
+  scopeNamespaced: false
+  # Strip the legacy blanket verb so it cannot win by fallback.
+  restrictedVerbs:
+    - impersonate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      # Named human operators, matched against the raw Impersonate-User value.
+      - resource: users
+        names:
+          - alice@example.com
+          - bob@example.com
+      # Groups the impersonated identity may carry (Impersonate-Group).
+      # system:masters is rejected by both the apiserver and this operator.
+      - resource: groups
+        names:
+          - oidc:support-readers
+          - system:authenticated
+      # Impersonate-Uid pins the identity to one specific instance.
+      - resource: uids
+        names:
+          - "8f1c1b3e-0000-4000-8000-0000000000aa"
+      # Impersonate-Extra-<key>; extraKey becomes the RBAC subresource, so this
+      # renders as resources: ["userextras/example.com/ticket-id"].
+      - resource: userextras
+        extraKey: example.com/ticket-id
+        names:
+          - "*"
+    actions:
+      # Action rules use the TARGET request's own apiGroups/resources. There is
+      # no group override and no impersonate-on:<mode>:* prefix wildcard, so the
+      # underlying verbs are enumerated explicitly.
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+          - pods/log
+          - configmaps
+          - events
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - apps
+        resources:
+          - deployments
+          - statefulsets
+          - daemonsets
+        verbs:
+          - get
+          - list
+          - watch
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRole: serviceaccount mode — cluster-scoped
+# Use case: a GitOps reconciler that applies manifests as a per-tenant
+# ServiceAccount, so the tenant's own RBAC is the authoritative permission check.
+#
+# NOTE: names are the BARE ServiceAccount names, not the full
+# system:serviceaccount:<ns>:<name> username. The apiserver checks
+# authentication.k8s.io/serviceaccounts with the SA namespace as the rule
+# namespace.
+#
+# HEADER-MIXING TRAP: the serviceaccount mode is only selected when
+# Impersonate-User is the ONLY impersonation header set. Sending
+# Impersonate-Uid / Impersonate-Group / Impersonate-Extra-* alongside an SA
+# username silently skips this mode and falls back to legacy impersonation.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RoleDefinition
+metadata:
+  name: rd-ci-serviceaccount-gitops-applier
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/privilege-level: operator
+    t-caas.telekom.com/scope: cluster
+spec:
+  targetRole: ClusterRole
+  targetName: t-caas-ci-serviceaccount-gitops-applier
+  scopeNamespaced: false
+  restrictedVerbs:
+    - impersonate
+  constrainedImpersonation:
+    mode: serviceaccount
+    identities:
+      - resource: serviceaccounts
+        names:
+          - tenant-alpha-applier
+          - tenant-beta-applier
+    actions:
+      - apiGroups:
+          - ""
+          - apps
+        resources:
+          - configmaps
+          - secrets
+          - deployments
+        verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+
+---
+# -----------------------------------------------------------------------------
+# Role: serviceaccount mode — namespaced
+# serviceaccounts is the ONLY identity resource that may be granted from a
+# namespaced Role; users/groups/uids/userextras/nodes are cluster-scoped and
+# require targetRole: ClusterRole.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RoleDefinition
+metadata:
+  name: rd-ci-namespaced-sa-impersonator
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/privilege-level: developer
+    t-caas.telekom.com/scope: namespace
+spec:
+  targetRole: Role
+  targetNamespace: tenant-alpha
+  targetName: t-caas-ci-namespaced-sa-impersonator
+  scopeNamespaced: true
+  restrictedVerbs:
+    - impersonate
+  constrainedImpersonation:
+    mode: serviceaccount
+    identities:
+      - resource: serviceaccounts
+        names:
+          - tenant-alpha-worker
+    actions:
+      - apiGroups:
+          - batch
+        resources:
+          - jobs
+        verbs:
+          - get
+          - list
+          - create
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRole: arbitrary-node mode
+# Use case: a node-lifecycle controller that must act as any kubelet identity,
+# e.g. to drive drain/cordon flows on behalf of a node.
+#
+# names are the BARE node names, not system:node:<name>. Impersonating a node
+# forces Groups=[system:nodes]; groups can never be impersonated alongside it,
+# which is why arbitrary-node accepts only the "nodes" identity resource.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RoleDefinition
+metadata:
+  name: rd-ci-arbitrary-node-lifecycle
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/privilege-level: operator
+    t-caas.telekom.com/scope: cluster
+spec:
+  targetRole: ClusterRole
+  targetName: t-caas-ci-arbitrary-node-lifecycle
+  scopeNamespaced: false
+  restrictedVerbs:
+    - impersonate
+  constrainedImpersonation:
+    mode: arbitrary-node
+    identities:
+      - resource: nodes
+        names:
+          - worker-01
+          - worker-02
+          - worker-03
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - nodes
+          - nodes/status
+          - pods
+        verbs:
+          - get
+          - list
+          - patch
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRole: associated-node mode
+# Use case: a DaemonSet agent that may act ONLY as the node it is scheduled on.
+# The apiserver compares the requesting ServiceAccount's
+# authentication.kubernetes.io/node-name extra value against the requested
+# system:node:<name>, so this is the least-privilege node mode.
+#
+# associated-node identity rules take NO names: the apiserver authorizes the
+# wildcard node name and performs the association check itself. Setting names
+# here is rejected by admission.
+#
+# Wiring the agent: inject spec.nodeName via the downward API and set it as
+# rest.ImpersonationConfig.UserName = "system:node:" + nodeName. Send NO other
+# impersonation header, or the mode is silently skipped.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RoleDefinition
+metadata:
+  name: rd-ci-associated-node-agent
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/privilege-level: operator
+    t-caas.telekom.com/scope: cluster
+spec:
+  targetRole: ClusterRole
+  targetName: t-caas-ci-associated-node-agent
+  scopeNamespaced: false
+  restrictedVerbs:
+    - impersonate
+  constrainedImpersonation:
+    mode: associated-node
+    identities:
+      # No names: the association check is performed by the apiserver.
+      - resource: nodes
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - nodes/status
+          - events
+        verbs:
+          - get
+          - patch
+          - create
+
+---
+# -----------------------------------------------------------------------------
+# RBACPolicy: permits delegated constrained impersonation grants
+# Constrained impersonation is DENY BY DEFAULT for RestrictedRoleDefinitions:
+# without roleLimits.constrainedImpersonation.allowed=true a tenant grant is
+# reported as non-compliant.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RBACPolicy
+metadata:
+  name: sample-policy-constrained-impersonation
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/policy-tier: samples
+    t-caas.telekom.com/sample-case: allowed
+spec:
+  appliesTo:
+    namespaces:
+      - "*"
+      - sample-tenant-a
+      - sample-tenant-b
+  roleLimits:
+    allowClusterRoles: true
+    forbiddenVerbs:
+      - escalate
+    constrainedImpersonation:
+      # Opt in explicitly.
+      allowed: true
+      # Only the two modes that do not touch node identities.
+      allowedModes:
+        - user-info
+        - serviceaccount
+      allowedIdentityResources:
+        - users
+        - groups
+        - serviceaccounts
+      # Tenants may only allowlist identities inside their own naming prefix.
+      identityNameLimits:
+        allowedPrefixes:
+          - "sample-tenant-"
+          - "oidc:sample-"
+        forbiddenNames:
+          - cluster-admins
+      # Destructive verbs may never be performed while impersonating.
+      forbiddenActionVerbs:
+        - delete
+        - deletecollection
+      # Require the tenant to also strip the legacy blanket verb, so the
+      # constraint cannot be defeated by fallback.
+      forbidLegacyFallback: true
+      maxIdentityNames: 16
+  subjectLimits:
+    allowedKinds:
+      - ServiceAccount
+      - Group
+
+---
+# -----------------------------------------------------------------------------
+# RestrictedRoleDefinition: delegated user-info grant within policy limits
+# Every identity name matches identityNameLimits.allowedPrefixes, the mode and
+# identity resources are on the policy allowlists, no forbidden action verb is
+# used, and restrictedVerbs strips the legacy verb as forbidLegacyFallback
+# requires. This therefore reconciles as compliant.
+# -----------------------------------------------------------------------------
+apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: RestrictedRoleDefinition
+metadata:
+  name: rrd-ci-tenant-user-info-reader
+  labels:
+    app.kubernetes.io/name: auth-operator
+    app.kubernetes.io/managed-by: kustomize
+    t-caas.telekom.com/tenant: sample-tenant-a
+spec:
+  policyRef:
+    name: sample-policy-constrained-impersonation
+  targetRole: ClusterRole
+  targetName: t-caas-ci-tenant-user-info-reader
+  scopeNamespaced: false
+  restrictedVerbs:
+    - escalate
+    - impersonate
+  constrainedImpersonation:
+    mode: user-info
+    identities:
+      - resource: users
+        names:
+          - sample-tenant-a-operator
+      - resource: groups
+        names:
+          - oidc:sample-tenant-a-readers
+    actions:
+      - apiGroups:
+          - ""
+        resources:
+          - pods
+          - pods/log
+        verbs:
+          - get
+          - list
+          - watch

@@ -16,6 +16,11 @@ resources:
   - authorization_v1alpha1_rbacpolicy.yaml
   - authorization_v1alpha1_restrictedbinddefinition.yaml
   - authorization_v1alpha1_restrictedroledefinition.yaml
+  # Constrained impersonation (KEP-5284) samples. Valid on every cluster: on an
+  # apiserver without the ConstrainedImpersonation feature gate the generated
+  # grants are accepted but inert, which the operator surfaces via the
+  # ConstrainedImpersonationEffective condition.
+  - authorization_v1alpha1_constrained_impersonation.yaml
   # NOTE: Broken sample cases live under config/samples/broken/ and are applied
   # explicitly in CI output-delta to surface expected failure behavior.
 # +kubebuilder:scaffold:manifestskustomizesamples
