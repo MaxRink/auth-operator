@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-rc.5] — Pre-release
+
 ### Changed
 
 - Forced the remaining transitive Go dependencies (grpc, k8s.io/apiserver-adjacent
@@ -162,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflows for SBOM attestation and image signature verification
 
-[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.4...HEAD
+[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.5...HEAD
+[0.5.0-rc.5]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.4...v0.5.0-rc.5
 [0.5.0-rc.4]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.3...v0.5.0-rc.4
 [0.5.0-rc.3]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.2...v0.5.0-rc.3
 [0.5.0-rc.2]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.1...v0.5.0-rc.2
