@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-rc.7] — Pre-release
+
+### CI
+
+- Closed a Dependabot blind spot: the `github-actions` ecosystem was only
+  configured for the repo root, so actions pinned inside
+  `.github/actions/*/action.yml` composite actions (`actions/setup-go`,
+  `docker/setup-buildx-action`, `docker/login-action`) never got scanned and
+  had silently drifted behind versions already used elsewhere in the repo.
+  Bumped all three and added a `dependabot.yml` entry per composite-action
+  directory to prevent recurrence.
+
 ## [0.5.0-rc.6] — Pre-release
 
 ### Documentation
@@ -174,7 +186,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflows for SBOM attestation and image signature verification
 
-[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.6...HEAD
+[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.7...HEAD
+[0.5.0-rc.7]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.6...v0.5.0-rc.7
 [0.5.0-rc.6]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.5...v0.5.0-rc.6
 [0.5.0-rc.5]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.4...v0.5.0-rc.5
 [0.5.0-rc.4]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.3...v0.5.0-rc.4
