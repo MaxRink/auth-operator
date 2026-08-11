@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-rc.3] — Pre-release
+
+### Changed
+
+- Bumped the `distroless/static-debian12` container base image digest and the `actions-minor-patch` GitHub Actions group to their latest patched releases (#517, #518).
+
 ## [0.5.0-rc.2] — Pre-release
 
 ### Changed
@@ -140,7 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflows for SBOM attestation and image signature verification
 
-[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.2...HEAD
+[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.3...HEAD
+[0.5.0-rc.3]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.2...v0.5.0-rc.3
 [0.5.0-rc.2]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.1...v0.5.0-rc.2
 [0.4.0-rc.12]: https://github.com/telekom/auth-operator/compare/v0.4.0-rc.5...v0.4.0-rc.12
 [0.4.0-rc.5]: https://github.com/telekom/auth-operator/releases/tag/v0.4.0-rc.5
