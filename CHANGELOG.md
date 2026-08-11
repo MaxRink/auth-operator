@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-rc.6] — Pre-release
+
 ### Documentation
 
 - Added `docs/flux-impersonation-rbac.md`, documenting the RBAC an authorization
@@ -172,7 +174,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI release workflows for SBOM attestation and image signature verification
 
-[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.5...HEAD
+[Unreleased]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.6...HEAD
+[0.5.0-rc.6]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.5...v0.5.0-rc.6
 [0.5.0-rc.5]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.4...v0.5.0-rc.5
 [0.5.0-rc.4]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.3...v0.5.0-rc.4
 [0.5.0-rc.3]: https://github.com/telekom/auth-operator/compare/v0.5.0-rc.2...v0.5.0-rc.3
