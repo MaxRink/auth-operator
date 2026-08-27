@@ -5447,6 +5447,7 @@ func TestReconcile_SkippedExternalServiceAccountHonorsMissingRoleBackoff(t *test
 				Type:               string(authorizationv1alpha1.RoleRefValidCondition),
 				Status:             metav1.ConditionFalse,
 				Reason:             string(authorizationv1alpha1.RoleRefInvalidReason),
+				Message:            fmt.Sprintf(string(authorizationv1alpha1.RoleRefInvalidMessage), []string{"ClusterRole/missing-role"}),
 				LastTransitionTime: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
 			}},
 		},
