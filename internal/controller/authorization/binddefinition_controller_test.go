@@ -5399,7 +5399,7 @@ func TestReconcile_MissingTargetNamespaceAlsoReportsSkippedExternalServiceAccoun
 	var updated authorizationv1alpha1.BindDefinition
 	g.Expect(c.Get(ctx, types.NamespacedName{Name: bd.Name}, &updated)).To(Succeed())
 	g.Expect(updated.Status.GeneratedServiceAccounts).To(BeEmpty())
-	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("external-ns/external-sa: not found (creation opted out)"))
+	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("external-ns/external-sa: namespace unavailable (creation opted out)"))
 	g.Expect(updated.Status.BindReconciled).To(BeFalse())
 
 	serviceAccountRefsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
