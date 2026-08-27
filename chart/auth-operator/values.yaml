@@ -130,6 +130,10 @@ webhookServer:
   # authorization for Namespace UPDATE requests. Protected-label validation
   # still runs. Set to "false" to require normal authorization for those updates.
   capiOperatorUpdateBypass: "false"
+  # DNS label key domains allowed in BindDefinition namespace selectors.
+  # Set multiple domains to allow labels from more than one group.
+  bindDefinitionNamespaceSelectorLabelGroups:
+    - t-caas.telekom.com
   # Maximum sustained requests per second for the /authorize endpoint.
   # Disabled by default because rate limiting must only be enabled when
   # authorizeAuth.tokenSecretName is configured for trusted callers.

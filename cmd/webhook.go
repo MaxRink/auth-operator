@@ -34,21 +34,22 @@ import (
 )
 
 var (
-	webhookPort                    int
-	webhookCertsDir                string
-	enableHTTP2                    bool
-	disableCertRotation            bool
-	certRotationDNSName            string
-	certRotationSecretName         string
-	certRotationValidatingWebhooks []string
-	certRotationMutatingWebhooks   []string
-	enableTDGMigration             bool
-	enableCAPIOperatorUpdateBypass bool
-	authorizeRateLimit             float64
-	authorizeRateBurst             int
-	authorizeAuthTokenFile         string
-	allowUnauthenticatedAuthorize  bool
-	webhookLeaderElect             bool
+	webhookPort                                int
+	webhookCertsDir                            string
+	enableHTTP2                                bool
+	disableCertRotation                        bool
+	certRotationDNSName                        string
+	certRotationSecretName                     string
+	certRotationValidatingWebhooks             []string
+	certRotationMutatingWebhooks               []string
+	enableTDGMigration                         bool
+	enableCAPIOperatorUpdateBypass             bool
+	authorizeRateLimit                         float64
+	authorizeRateBurst                         int
+	authorizeAuthTokenFile                     string
+	allowUnauthenticatedAuthorize              bool
+	webhookLeaderElect                         bool
+	bindDefinitionNamespaceSelectorLabelGroups []string
 )
 
 // webhookCmd represents the webhook command.
@@ -68,6 +69,7 @@ ensuring authorization policies are enforced at creation time.`,
 			"enableHTTP2", enableHTTP2,
 			"disableCertRotation", disableCertRotation,
 			"namespace", namespace,
+			"bindDefinitionNamespaceSelectorLabelGroups", bindDefinitionNamespaceSelectorLabelGroups,
 		)
 		ctx, cancel := context.WithCancelCause(ctrl.SetupSignalHandler())
 		defer cancel(nil)
@@ -249,6 +251,9 @@ ensuring authorization policies are enforced at creation time.`,
 
 func configureWebhooks(mgr manager.Manager, tp *tracing.Provider) error {
 	log := ctrl.Log.WithName("webhook-setup")
+	if err := authorizationv1alpha1.ValidateNamespaceAdmissionSelectorLabelGroups(bindDefinitionNamespaceSelectorLabelGroups); err != nil {
+		return fmt.Errorf("invalid BindDefinition namespace selector label groups: %w", err)
+	}
 
 	log.Info("registering authorization webhook at /authorize")
 	// Use TracerIfEnabled() so that the webhook handler receives nil when
@@ -286,7 +291,7 @@ func configureWebhooks(mgr manager.Manager, tp *tracing.Provider) error {
 	}
 
 	log.Info("setting up BindDefinition webhook")
-	if err := (&authorizationv1alpha1.BindDefinition{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&authorizationv1alpha1.BindDefinition{}).SetupWebhookWithManager(mgr, bindDefinitionNamespaceSelectorLabelGroups...); err != nil {
 		return fmt.Errorf("unable to create webhook for BindDefinition: %w", err)
 	}
 	// Setup Namespace mutator
@@ -330,7 +335,7 @@ func configureWebhooks(mgr manager.Manager, tp *tracing.Provider) error {
 
 	// Setup RestrictedBindDefinition validator
 	log.Info("setting up RestrictedBindDefinition validating webhook")
-	if err := (&authorizationv1alpha1.RestrictedBindDefinition{}).SetupWebhookWithManager(mgr); err != nil {
+	if err := (&authorizationv1alpha1.RestrictedBindDefinition{}).SetupWebhookWithManager(mgr, bindDefinitionNamespaceSelectorLabelGroups...); err != nil {
 		return fmt.Errorf("unable to create webhook for RestrictedBindDefinition: %w", err)
 	}
 
@@ -385,6 +390,9 @@ func init() {
 	webhookCmd.Flags().BoolVar(&allowUnauthenticatedAuthorize, "allow-unauthenticated-authorize", false,
 		"Allow /authorize requests without a bearer token when no authorize auth token file is configured. "+
 			"Insecure; use only for development or temporary migration.")
+	webhookCmd.Flags().StringSliceVar(&bindDefinitionNamespaceSelectorLabelGroups, "binddefinition-namespace-selector-label-group",
+		[]string{authorizationv1alpha1.DefaultNamespaceAdmissionSelectorLabelGroup},
+		"DNS label group allowed in BindDefinition namespace admission selectors; repeat or comma-separate to allow multiple groups")
 
 	webhookCmd.Flags().BoolVar(&webhookLeaderElect, "leader-elect", false,
 		"Enable leader election for the webhook manager. Required when running "+

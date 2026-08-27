@@ -269,6 +269,12 @@ func TestValidateNamespaceBindingsAllowsWellKnownTCAASLabels(t *testing.T) {
 			}}},
 		},
 		{
+			name: "protected match label",
+			selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				LabelKeyProtected: "true",
+			}},
+		},
+		{
 			name: "well-known domain match label",
 			selector: metav1.LabelSelector{MatchLabels: map[string]string{
 				"t-caas.telekom.com/quarantine": "true",
@@ -305,6 +311,73 @@ func TestValidateNamespaceBindingsAllowsWellKnownTCAASLabels(t *testing.T) {
 			}
 			if !tc.wantError && err != nil {
 				t.Fatalf("expected selector to be allowed, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateNamespaceBindingsUsesConfiguredLabelGroups(t *testing.T) {
+	kind := schema.GroupKind{Group: GroupVersion.Group, Kind: BindDefinitionKind}
+	selector := func(key string) []NamespaceBinding {
+		return []NamespaceBinding{{
+			ClusterRoleRefs: []string{"view"},
+			NamespaceSelector: []metav1.LabelSelector{{
+				MatchLabels: map[string]string{key: "true"},
+			}},
+		}}
+	}
+
+	if err := validateNamespaceBindingsWithLabelGroups(kind, "custom-group", selector("platform.example.com/managed"), []string{"platform.example.com"}); err != nil {
+		t.Fatalf("configured label group should be allowed: %v", err)
+	}
+	if err := validateNamespaceBindingsWithLabelGroups(kind, "custom-group", selector("t-caas.telekom.com/quarantine"), []string{"platform.example.com"}); err == nil {
+		t.Fatal("default label group should not be allowed when custom groups replace it")
+	}
+	if err := validateNamespaceBindingsWithLabelGroups(kind, "custom-group", selector("platform.example.com.evil/managed"), []string{"platform.example.com"}); err == nil {
+		t.Fatal("lookalike label group should be rejected")
+	}
+}
+
+func TestValidateNamespaceBindingsReportsMatchExpressionIndex(t *testing.T) {
+	kind := schema.GroupKind{Group: GroupVersion.Group, Kind: BindDefinitionKind}
+	err := validateNamespaceBindings(kind, "expression-path", []NamespaceBinding{{
+		ClusterRoleRefs: []string{"view"},
+		NamespaceSelector: []metav1.LabelSelector{{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      "example.com/not-allowed",
+				Operator: metav1.LabelSelectorOpExists,
+			}},
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected selector validation error, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "spec.roleBindings[0].namespaceSelector[0].matchExpressions[0].key") {
+		t.Fatalf("expected indexed match expression path, got %q", got)
+	}
+}
+
+func TestValidateNamespaceAdmissionSelectorLabelGroups(t *testing.T) {
+	testCases := []struct {
+		name   string
+		groups []string
+		valid  bool
+	}{
+		{name: "default", groups: nil, valid: true},
+		{name: "multiple DNS domains", groups: []string{"platform.example.com", "corp.example"}, valid: true},
+		{name: "empty group", groups: []string{""}, valid: false},
+		{name: "wildcard group", groups: []string{"platform.example.com/*"}, valid: false},
+		{name: "group with slash", groups: []string{"platform.example.com/"}, valid: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateNamespaceAdmissionSelectorLabelGroups(tc.groups)
+			if tc.valid && err != nil {
+				t.Fatalf("expected valid groups, got %v", err)
+			}
+			if !tc.valid && err == nil {
+				t.Fatal("expected invalid groups to be rejected")
 			}
 		})
 	}

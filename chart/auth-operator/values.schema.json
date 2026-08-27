@@ -376,6 +376,15 @@
           "enum": ["true", "false", true, false],
           "default": "false"
         },
+        "bindDefinitionNamespaceSelectorLabelGroups": {
+          "type": "array",
+          "description": "DNS label key domains allowed in BindDefinition namespace selectors.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "default": ["t-caas.telekom.com"]
+        },
         "authorizeRateLimit": {
           "type": "number",
           "description": "Maximum sustained requests per second for the /authorize endpoint. Set to 0 to disable rate limiting. Per-pod limit. Requires webhookServer.authorizeAuth.tokenSecretName when > 0.",

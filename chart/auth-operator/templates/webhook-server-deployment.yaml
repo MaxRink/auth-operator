@@ -40,6 +40,9 @@ spec:
         - --cert-rotation-validating-webhook={{ include "auth-operator.fullname" . }}-binder-validating-webhook-configuration
         - --tdg-migration={{ .Values.webhookServer.tdgMigration }}
         - --capi-operator-update-bypass={{ .Values.webhookServer.capiOperatorUpdateBypass }}
+        {{- range .Values.webhookServer.bindDefinitionNamespaceSelectorLabelGroups }}
+        - --binddefinition-namespace-selector-label-group={{ . }}
+        {{- end }}
         - --authorize-rate-limit={{ .Values.webhookServer.authorizeRateLimit }}
         - --authorize-rate-burst={{ .Values.webhookServer.authorizeRateBurst }}
         - --allow-unauthenticated-authorize={{ .Values.webhookServer.allowUnauthenticatedAuthorize }}
