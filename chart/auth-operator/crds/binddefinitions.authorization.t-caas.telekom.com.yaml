@@ -264,6 +264,9 @@ spec:
             - message: ServiceAccount subjects must specify a namespace
               rule: self.subjects.all(s, s.kind != 'ServiceAccount' || (has(s.namespace)
                 && size(s.namespace) > 0))
+            - message: externalServiceAccountRefs entries must specify a namespace
+              rule: '!has(self.externalServiceAccountRefs) || self.externalServiceAccountRefs.all(r,
+                has(r.namespace) && size(r.namespace) > 0)'
           status:
             description: BindDefinitionStatus defines the observed state of BindDefinition.
             properties:
