@@ -533,6 +533,59 @@ func (r *BindDefinitionReconciler) addExternalSAReference(
 	return nil
 }
 
+// detachServiceAccountFromBindDefinition removes only this BindDefinition's
+// historical ownership and source metadata. It is used when an existing
+// ServiceAccount is explicitly delegated to another controller. Provider-owned
+// labels, annotations, and managed fields are intentionally untouched.
+func (r *BindDefinitionReconciler) detachServiceAccountFromBindDefinition(
+	ctx context.Context,
+	sa *corev1.ServiceAccount,
+	bindDef *authorizationv1alpha1.BindDefinition,
+) error {
+	if sa == nil || bindDef == nil {
+		return nil
+	}
+	reader := r.reader
+	if reader == nil {
+		reader = r.client
+	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		fresh := &corev1.ServiceAccount{}
+		if err := reader.Get(ctx, types.NamespacedName{Name: sa.Name, Namespace: sa.Namespace}, fresh); err != nil {
+			return err
+		}
+
+		orig := fresh.DeepCopy()
+		ownerChanged := removeOwnerRef(fresh, bindDef)
+		sourceNamesChanged := false
+		sourceKindChanged := false
+		if fresh.Annotations != nil {
+			oldSourceNames := fresh.Annotations[helpers.SourceNamesAnnotation]
+			newSourceNames := helpers.RemoveSourceName(oldSourceNames, bindDef.Name)
+			sourceNamesChanged = newSourceNames != oldSourceNames
+			if sourceNamesChanged {
+				if newSourceNames == "" {
+					delete(fresh.Annotations, helpers.SourceNamesAnnotation)
+				} else {
+					fresh.Annotations[helpers.SourceNamesAnnotation] = newSourceNames
+				}
+				if fresh.Annotations[helpers.SourceKindAnnotation] == authorizationv1alpha1.BindDefinitionKind && newSourceNames == "" {
+					delete(fresh.Annotations, helpers.SourceKindAnnotation)
+					sourceKindChanged = true
+				}
+			}
+		}
+		if !ownerChanged && !sourceNamesChanged && !sourceKindChanged {
+			return nil
+		}
+
+		if err := r.client.Patch(ctx, fresh, sigs_client.MergeFromWithOptions(orig, sigs_client.MergeFromWithOptimisticLock{})); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 // addManagedSAReference merges the BindDefinition name into the managed
 // ServiceAccount source-names annotation without taking SSA ownership of that
 // shared scalar field.

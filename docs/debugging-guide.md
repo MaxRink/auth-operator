@@ -734,6 +734,32 @@ This field lists ServiceAccounts referenced by a BindDefinition that were
 **not created** by the operator — they already existed. The operator uses
 these SAs in bindings but does not manage their lifecycle (create/delete).
 
+### How do I delegate creation of one ServiceAccount?
+
+Add the ServiceAccount to both `spec.subjects` and
+`spec.externalServiceAccountRefs`:
+
+```yaml
+spec:
+  subjects:
+    - kind: ServiceAccount
+      name: flux-controller
+      namespace: flux-system
+  externalServiceAccountRefs:
+    - name: flux-controller
+      namespace: flux-system
+```
+
+The operator will not create or update this ServiceAccount. If it already
+exists, it removes only this BindDefinition's historical owner/source metadata
+and records it as external. If it does not exist, the binding definition keeps
+reconciling its other resources but reports
+`status.conditions[?(@.type=="ServiceAccountRefsReady")]` as `False` and lists
+the reference in `status.skippedServiceAccounts`. Check that field and the
+`ServiceAccountSkipped` event while waiting for the provisioning controller.
+Admission rejects references that omit a namespace, are duplicated, or do not
+match a ServiceAccount subject.
+
 ---
 
 ## See Also

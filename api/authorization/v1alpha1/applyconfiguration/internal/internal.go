@@ -66,6 +66,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: clusterRoleBindings
       type:
         namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.ClusterBinding
+    - name: externalServiceAccountRefs
+      type:
+        list:
+          elementType:
+            namedType: com.github.telekom.auth-operator.api.authorization.v1alpha1.SARef
+          elementRelationship: atomic
     - name: roleBindings
       type:
         list:
@@ -114,6 +120,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: observedGeneration
       type:
         scalar: numeric
+    - name: skippedServiceAccounts
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
 - name: com.github.telekom.auth-operator.api.authorization.v1alpha1.BindingLimits
   map:
     fields:

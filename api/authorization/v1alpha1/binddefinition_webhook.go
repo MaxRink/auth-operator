@@ -112,6 +112,9 @@ func (v *BindDefinitionValidator) validateBindDefinitionSpec(ctx context.Context
 	if err := validateBindDefinitionSubjects(kind, r.Name, r.Spec.Subjects); err != nil {
 		return warnings, err
 	}
+	if err := validateExternalServiceAccountRefs(kind, r.Name, r.Spec); err != nil {
+		return warnings, err
+	}
 
 	existingBD, err := v.findBindDefinitionTargetNameConflict(ctx, r)
 	if err != nil {
@@ -605,6 +608,56 @@ func validateBindDefinitionSubjects(kind schema.GroupKind, name string, subjects
 			}
 		default:
 			allErrs = append(allErrs, field.NotSupported(subjectPath.Child("kind"), subject.Kind, supportedSubjectKinds))
+		}
+	}
+	if len(allErrs) > 0 {
+		return apierrors.NewInvalid(kind, name, allErrs)
+	}
+	return nil
+}
+
+// validateExternalServiceAccountRefs verifies that explicitly external
+// ServiceAccounts are complete, unique references to ServiceAccount subjects.
+// The webhook deliberately validates only the BindDefinition declaration; it
+// does not require the referenced ServiceAccounts to exist because another
+// controller is expected to provision them.
+func validateExternalServiceAccountRefs(kind schema.GroupKind, name string, spec BindDefinitionSpec) error {
+	if len(spec.ExternalServiceAccountRefs) == 0 {
+		return nil
+	}
+
+	subjects := make(map[string]struct{})
+	for _, subject := range spec.Subjects {
+		if subject.Kind == rbacv1.ServiceAccountKind {
+			subjects[subject.Namespace+"/"+subject.Name] = struct{}{}
+		}
+	}
+	seen := make(map[string]struct{}, len(spec.ExternalServiceAccountRefs))
+	var allErrs field.ErrorList
+	for i, ref := range spec.ExternalServiceAccountRefs {
+		refPath := field.NewPath("spec", "externalServiceAccountRefs").Index(i)
+		if ref.Name == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("name"), "ServiceAccount name is required"))
+		}
+		if ref.Namespace == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("namespace"), "ServiceAccount namespace is required"))
+		} else {
+			for _, msg := range utilvalidation.IsDNS1123Label(ref.Namespace) {
+				allErrs = append(allErrs, field.Invalid(refPath.Child("namespace"), ref.Namespace, msg))
+			}
+		}
+
+		key := ref.Namespace + "/" + ref.Name
+		if _, exists := seen[key]; exists {
+			allErrs = append(allErrs, field.Duplicate(refPath, ref))
+		} else {
+			seen[key] = struct{}{}
+		}
+		if ref.Name != "" && ref.Namespace != "" {
+			if _, exists := subjects[key]; !exists {
+				allErrs = append(allErrs, field.Invalid(refPath,
+					ref, "must reference a ServiceAccount listed in spec.subjects"))
+			}
 		}
 	}
 	if len(allErrs) > 0 {

@@ -43,6 +43,10 @@ type BindDefinitionStatusApplyConfiguration struct {
 	// in bindings but not managed (created/deleted) by the controller.
 	// Format: "<namespace>/<name>".
 	ExternalServiceAccounts []string `json:"externalServiceAccounts,omitempty"`
+	// SkippedServiceAccounts lists explicitly external ServiceAccount refs that
+	// are not present. The controller does not create these ServiceAccounts.
+	// Format: "<namespace>/<name>: <reason>".
+	SkippedServiceAccounts []string `json:"skippedServiceAccounts,omitempty"`
 	// Conditions defines current service state of the Bind definition. All conditions should evaluate to true to signify successful reconciliation.
 	Conditions []metav1.ConditionApplyConfiguration `json:"conditions,omitempty"`
 }
@@ -95,6 +99,16 @@ func (b *BindDefinitionStatusApplyConfiguration) WithMissingRoleRefs(values ...s
 func (b *BindDefinitionStatusApplyConfiguration) WithExternalServiceAccounts(values ...string) *BindDefinitionStatusApplyConfiguration {
 	for i := range values {
 		b.ExternalServiceAccounts = append(b.ExternalServiceAccounts, values[i])
+	}
+	return b
+}
+
+// WithSkippedServiceAccounts adds the given value to the SkippedServiceAccounts field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the SkippedServiceAccounts field.
+func (b *BindDefinitionStatusApplyConfiguration) WithSkippedServiceAccounts(values ...string) *BindDefinitionStatusApplyConfiguration {
+	for i := range values {
+		b.SkippedServiceAccounts = append(b.SkippedServiceAccounts, values[i])
 	}
 	return b
 }
