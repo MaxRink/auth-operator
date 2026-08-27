@@ -1628,6 +1628,13 @@ func (r *BindDefinitionReconciler) clearGeneratedServiceAccountsStatus(
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		fresh := &authorizationv1alpha1.BindDefinition{}
 		if err := r.ownershipReader().Get(ctx, types.NamespacedName{Name: bindDefinition.Name, Namespace: bindDefinition.Namespace}, fresh); err != nil {
+			// The live reader may legitimately observe the BindDefinition after it
+			// has already been removed from the API. Status cleanup is then moot,
+			// and must not turn a successful deletion/cache-race reconcile into an
+			// error.
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
 			return err
 		}
 		if len(fresh.Status.GeneratedServiceAccounts) == 0 {
