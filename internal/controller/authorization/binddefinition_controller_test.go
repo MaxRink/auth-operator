@@ -4176,6 +4176,128 @@ func TestBindDefinitionDeleteDetachesExplicitExternalServiceAccount(t *testing.T
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
+func TestBindDefinitionManagedToExternalTransitionWithStaleCachePreservesLiveServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "stale-cache-external-bd",
+			UID:        "stale-cache-external-bd-uid",
+			Generation: 2,
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "stale-cache-external",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+		},
+		Status: authorizationv1alpha1.BindDefinitionStatus{
+			GeneratedServiceAccounts: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	owner := metav1.OwnerReference{
+		APIVersion: authorizationv1alpha1.GroupVersion.String(),
+		Kind:       authorizationv1alpha1.BindDefinitionKind,
+		Name:       bd.Name,
+		UID:        bd.UID,
+	}
+	providerLabels := map[string]string{"app.kubernetes.io/managed-by": "Helm"}
+	// The cached client is one observation behind and still reports the old
+	// owner. The live API reader already reflects the provider's ownership.
+	cachedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: "provider-sa", Namespace: "provider-ns", OwnerReferences: []metav1.OwnerReference{owner}, Labels: providerLabels,
+	}}
+	liveSA := cachedSA.DeepCopy()
+	liveSA.OwnerReferences = nil
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "provider-ns"}}
+	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}}
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, cachedSA, ns, role).
+		WithStatusSubresource(bd).
+		Build()
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveSA).Build()
+	r := &BindDefinitionReconciler{client: cached, reader: live, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var cachedAfter corev1.ServiceAccount
+	g.Expect(cached.Get(ctx, types.NamespacedName{Name: cachedSA.Name, Namespace: cachedSA.Namespace}, &cachedAfter)).To(Succeed())
+	// The stale cache copy must not be deleted by pruning merely because the
+	// live reader observed the provider-owned object as already detached.
+	g.Expect(cachedAfter.Labels).To(Equal(providerLabels))
+	var liveAfter corev1.ServiceAccount
+	g.Expect(live.Get(ctx, types.NamespacedName{Name: liveSA.Name, Namespace: liveSA.Namespace}, &liveAfter)).To(Succeed())
+	g.Expect(liveAfter.OwnerReferences).To(BeEmpty())
+}
+
+func TestBindDefinitionDeleteWithStaleCachePreservesLiveExternalServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "stale-cache-delete-bd",
+			UID:        "stale-cache-delete-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "stale-cache-delete",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	owner := metav1.OwnerReference{
+		APIVersion: authorizationv1alpha1.GroupVersion.String(),
+		Kind:       authorizationv1alpha1.BindDefinitionKind,
+		Name:       bd.Name,
+		UID:        bd.UID,
+	}
+	// The informer cache still sees the historical owner, while the live API
+	// has already detached it (for example after a rapid opt-out update).
+	cachedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: "provider-sa", Namespace: "provider-ns", OwnerReferences: []metav1.OwnerReference{owner},
+	}}
+	liveSA := cachedSA.DeepCopy()
+	liveSA.OwnerReferences = nil
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, cachedSA).
+		WithStatusSubresource(bd).
+		Build()
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveSA).Build()
+	r := &BindDefinitionReconciler{client: cached, reader: live, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	g.Expect(cached.Delete(ctx, bd)).To(Succeed())
+	var deleting authorizationv1alpha1.BindDefinition
+	g.Expect(cached.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)).To(Succeed())
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// The explicit reference was present in spec but absent from status, so the
+	// deletion path must still avoid deleting it and must complete finalization.
+	var preserved corev1.ServiceAccount
+	g.Expect(live.Get(ctx, types.NamespacedName{Name: liveSA.Name, Namespace: liveSA.Namespace}, &preserved)).To(Succeed())
+	g.Expect(preserved.OwnerReferences).To(BeEmpty())
+	err = cached.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
 func TestBindDefinitionReconcilePrunesSelectorStaleRoleBinding(t *testing.T) {
 	ctx := context.Background()
 	g := NewWithT(t)
