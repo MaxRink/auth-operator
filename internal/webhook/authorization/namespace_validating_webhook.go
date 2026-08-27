@@ -168,7 +168,7 @@ func (v *NamespaceValidator) decodeNamespaces(logger logr.Logger, req admission.
 	return ns, oldNs, nil
 }
 
-// validateLabelImmutability checks that controlled labels are not modified or removed
+// validateLabelImmutability checks that controlled ownership and protected labels are not modified or removed
 // during namespace updates. Initial adoption (adding a label for the first time) is allowed
 // only for protected-label migration bypasses.
 // Returns a denial response if a violation is found, or nil if validation passes.
@@ -186,6 +186,7 @@ func (v *NamespaceValidator) validateLabelImmutability(logger logr.Logger, req a
 		authorizationv1alpha1.LabelKeyOwner,
 		authorizationv1alpha1.LabelKeyTenant,
 		authorizationv1alpha1.LabelKeyThirdParty,
+		authorizationv1alpha1.LabelKeyProtected,
 	}
 	if v.TDGMigration {
 		labelKeys = append(labelKeys, legacyOwnerLabel)
@@ -471,6 +472,14 @@ func namespaceMatchesSelectorForAdmissionOperation(
 	syntheticLabels := make(map[string]string)
 	for k, v := range expectedTrackedLabels {
 		syntheticLabels[k] = v
+	}
+	// Protected classification is security-sensitive and is supplied by the
+	// namespace request itself. Do not synthesize it from the selector: an
+	// ordinary selector (for example DoesNotExist) must not authorize a
+	// protected namespace, while a protected selector must evaluate the value
+	// submitted on CREATE.
+	if protected, ok := ns.Labels[authorizationv1alpha1.LabelKeyProtected]; ok {
+		syntheticLabels[authorizationv1alpha1.LabelKeyProtected] = protected
 	}
 	syntheticLabels[corev1.LabelMetadataName] = ns.Name
 	return labelSelector.Matches(labels.Set(syntheticLabels)), nil
