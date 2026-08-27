@@ -83,6 +83,7 @@ type NamespaceBinding struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterRoleBindings) && has(self.clusterRoleBindings.clusterRoleRefs) && size(self.clusterRoleBindings.clusterRoleRefs) > 0) || (has(self.roleBindings) && self.roleBindings.exists(rb, (has(rb.clusterRoleRefs) && size(rb.clusterRoleRefs) > 0) || (has(rb.roleRefs) && size(rb.roleRefs) > 0)))",message="at least one binding with a referenced role must be specified"
 // +kubebuilder:validation:XValidation:rule="size(self.subjects) > 0",message="at least one subject must be specified"
 // +kubebuilder:validation:XValidation:rule="self.subjects.all(s, s.kind != 'ServiceAccount' || (has(s.namespace) && size(s.namespace) > 0))",message="ServiceAccount subjects must specify a namespace"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalServiceAccountRefs) || self.externalServiceAccountRefs.all(r, has(r.namespace) && size(r.namespace) > 0)",message="externalServiceAccountRefs entries must specify a namespace"
 type BindDefinitionSpec struct {
 	// Name that will be prefixed to the concatenated string which is the name of the binding. Follows format "targetName-clusterrole-role-binding" where clusterrole/role is the in-cluster existing ClusterRole or Role.
 	// This field is immutable after creation; changing it would orphan existing bindings and service accounts.

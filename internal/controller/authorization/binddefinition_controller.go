@@ -535,6 +535,15 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		metrics.ReconcileErrors.WithLabelValues(metrics.ControllerBindDefinition, metrics.ErrorTypeAPI).Inc()
 		return ctrl.Result{}, err
 	}
+	if len(missingTargetNamespaces) > 0 {
+		requeueAfter := DefaultRequeueInterval
+		markRoleRefsInvalid := missingRoleRefCount == 0
+		if missingRoleRefCount > 0 {
+			requeueAfter = calculateMissingRoleRefBackoff(bindDefinition)
+		}
+		return r.handleMissingTargetNamespaces(ctx, bindDefinition, missingTargetNamespaces, markRoleRefsInvalid, requeueAfter)
+	}
+
 	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
 		conditions.MarkNotReady(bindDefinition, bindDefinition.Generation,
 			authorizationv1alpha1.ServiceAccountRefsSkippedReason,
@@ -549,15 +558,6 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
 		return ctrl.Result{RequeueAfter: DefaultRequeueInterval}, nil
-	}
-
-	if len(missingTargetNamespaces) > 0 {
-		requeueAfter := DefaultRequeueInterval
-		markRoleRefsInvalid := missingRoleRefCount == 0
-		if missingRoleRefCount > 0 {
-			requeueAfter = calculateMissingRoleRefBackoff(bindDefinition)
-		}
-		return r.handleMissingTargetNamespaces(ctx, bindDefinition, missingTargetNamespaces, markRoleRefsInvalid, requeueAfter)
 	}
 
 	// Mark Ready and apply final status via SSA (kstatus)

@@ -5352,6 +5352,68 @@ func TestReconcile_MissingExplicitRoleBindingNamespaceNotReady(t *testing.T) {
 	g.Expect(roleRefCond.Message).To(ContainSubstring("missing-ns"))
 }
 
+func TestReconcile_MissingTargetNamespaceAlsoReportsSkippedExternalServiceAccount(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	s := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	clusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}}
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       "BindDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "missing-ns-external-sa-bd",
+			UID:        "missing-ns-external-sa-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName: "missing-ns-external-sa-target",
+			Subjects: []rbacv1.Subject{
+				{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+			},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "external-sa", Namespace: "external-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+			RoleBindings: []authorizationv1alpha1.NamespaceBinding{{
+				Namespace:       "missing-ns",
+				ClusterRoleRefs: []string{"view"},
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(bd, clusterRole).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(10)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(DefaultRequeueInterval))
+
+	var updated authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: bd.Name}, &updated)).To(Succeed())
+	g.Expect(updated.Status.GeneratedServiceAccounts).To(BeEmpty())
+	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("external-ns/external-sa: not found (creation opted out)"))
+	g.Expect(updated.Status.BindReconciled).To(BeFalse())
+
+	serviceAccountRefsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
+	g.Expect(serviceAccountRefsReady).NotTo(BeNil())
+	g.Expect(serviceAccountRefsReady.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(serviceAccountRefsReady.Reason).To(Equal(string(authorizationv1alpha1.ServiceAccountRefsSkippedReason)))
+
+	ready := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ReadyCondition))
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(ready.Reason).To(Equal(string(authorizationv1alpha1.TargetNamespaceNotFoundReason)))
+	g.Expect(ready.Message).To(ContainSubstring("missing-ns"))
+}
+
 func TestReconcile_MissingExplicitNamespacePreservesMissingRoleRefs(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()
