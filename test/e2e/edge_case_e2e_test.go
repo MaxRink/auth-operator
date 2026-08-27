@@ -499,12 +499,16 @@ metadata:
 				return nil
 			}, reconcileTimeout, pollInterval).Should(Succeed())
 
-			cmd = utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
-				"--field-selector=reason=ServiceAccountOwnershipTransferred", "-o", "jsonpath={.items[*].message}")
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(string(output)).To(ContainSubstring("helm-controller"))
-			Expect(string(output)).To(ContainSubstring("unknown-controller"))
+			Eventually(func() bool {
+				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
+					"--field-selector=reason=ServiceAccountOwnershipTransferred", "-o", "jsonpath={.items[*].message}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return false
+				}
+				events := string(output)
+				return strings.Contains(events, "helm-controller") && strings.Contains(events, "unknown-controller")
+			}, reconcileTimeout, pollInterval).Should(BeTrue(), "takeover warning events should report both field managers")
 
 			By("Deleting the BindDefinition and proving transferred SAs are not deleted")
 			cmd = utils.CommandContext(context.Background(), "kubectl", "delete", "binddefinition", ownershipBD)
