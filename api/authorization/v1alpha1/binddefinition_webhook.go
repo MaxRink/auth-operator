@@ -29,6 +29,10 @@ import (
 type BindDefinitionValidator struct {
 	Client client.Client
 	Reader client.Reader
+	// AllowedNamespaceAdmissionSelectorLabelGroups contains DNS label key
+	// domains that may be used by namespace selectors. An empty value uses the
+	// default T-CaaS label domain.
+	AllowedNamespaceAdmissionSelectorLabelGroups []string
 }
 
 // supportedSubjectKinds lists the RBAC-supported subject types for BindDefinition subjects.
@@ -85,9 +89,13 @@ func (v *BindDefinitionValidator) checkRoleExists(
 }
 
 // SetupWebhookWithManager will setup the manager to manage the webhooks.
-func (r *BindDefinition) SetupWebhookWithManager(mgr ctrl.Manager) error {
+func (r *BindDefinition) SetupWebhookWithManager(mgr ctrl.Manager, allowedLabelGroups ...string) error {
 	return ctrl.NewWebhookManagedBy(mgr, r).
-		WithValidator(&BindDefinitionValidator{Client: mgr.GetClient(), Reader: mgr.GetAPIReader()}).
+		WithValidator(&BindDefinitionValidator{
+			Client: mgr.GetClient(),
+			Reader: mgr.GetAPIReader(),
+			AllowedNamespaceAdmissionSelectorLabelGroups: namespaceAdmissionSelectorLabelGroupsOrDefault(allowedLabelGroups),
+		}).
 		Complete()
 }
 
@@ -138,7 +146,7 @@ func (v *BindDefinitionValidator) validateBindDefinitionSpec(ctx context.Context
 	// Determine the missing-role policy from annotation.
 	policy := r.GetMissingRolePolicy()
 
-	if err := validateNamespaceBindings(kind, r.Name, r.Spec.RoleBindings); err != nil {
+	if err := validateNamespaceBindingsWithLabelGroups(kind, r.Name, r.Spec.RoleBindings, v.AllowedNamespaceAdmissionSelectorLabelGroups); err != nil {
 		logger.Info("validation failed: invalid roleBindings", "name", r.Name, "error", err.Error())
 		return warnings, err
 	}
@@ -483,15 +491,24 @@ func isLabelSelectorEmpty(selector *metav1.LabelSelector) bool {
 	return selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0)
 }
 
-func isAllowedNamespaceAdmissionSelectorKey(key string) bool {
-	return key == LabelKeyOwner ||
-		key == LabelKeyTenant ||
-		key == LabelKeyThirdParty ||
-		key == corev1.LabelMetadataName ||
-		strings.HasPrefix(key, WellKnownNamespaceLabelPrefix)
+func isAllowedNamespaceAdmissionSelectorKey(key string, allowedLabelGroups []string) bool {
+	if key == LabelKeyOwner || key == LabelKeyTenant || key == LabelKeyThirdParty || key == corev1.LabelMetadataName {
+		return true
+	}
+	for _, group := range namespaceAdmissionSelectorLabelGroupsOrDefault(allowedLabelGroups) {
+		if strings.HasPrefix(key, group+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateNamespaceBindings(kind schema.GroupKind, name string, bindings []NamespaceBinding) error {
+	return validateNamespaceBindingsWithLabelGroups(kind, name, bindings, nil)
+}
+
+func validateNamespaceBindingsWithLabelGroups(kind schema.GroupKind, name string, bindings []NamespaceBinding, allowedLabelGroups []string) error {
+	allowedLabelGroups = namespaceAdmissionSelectorLabelGroupsOrDefault(allowedLabelGroups)
 	for i, binding := range bindings {
 		if (len(binding.ClusterRoleRefs) > 0 || len(binding.RoleRefs) > 0) &&
 			binding.Namespace == "" &&
@@ -527,27 +544,54 @@ func validateNamespaceBindings(kind schema.GroupKind, name string, bindings []Na
 						err.Error())})
 			}
 			for key := range selector.MatchLabels {
-				if !isAllowedNamespaceAdmissionSelectorKey(key) {
+				if !isAllowedNamespaceAdmissionSelectorKey(key, allowedLabelGroups) {
 					return apierrors.NewInvalid(
 						kind,
 						name,
 						field.ErrorList{field.Invalid(
 							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchLabels").Key(key),
 							key,
-							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or well-known T-CaaS labels matching "+WellKnownNamespaceLabelPrefix+"*")})
+							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or configured label groups matching "+formatNamespaceAdmissionSelectorLabelGroups(allowedLabelGroups))})
 				}
 			}
 			for _, expr := range selector.MatchExpressions {
-				if !isAllowedNamespaceAdmissionSelectorKey(expr.Key) {
+				if !isAllowedNamespaceAdmissionSelectorKey(expr.Key, allowedLabelGroups) {
 					return apierrors.NewInvalid(
 						kind,
 						name,
 						field.ErrorList{field.Invalid(
 							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchExpressions").Key(expr.Key),
 							expr.Key,
-							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or well-known T-CaaS labels matching "+WellKnownNamespaceLabelPrefix+"*")})
+							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or configured label groups matching "+formatNamespaceAdmissionSelectorLabelGroups(allowedLabelGroups))})
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func namespaceAdmissionSelectorLabelGroupsOrDefault(groups []string) []string {
+	if len(groups) == 0 {
+		return []string{DefaultNamespaceAdmissionSelectorLabelGroup}
+	}
+	return groups
+}
+
+func formatNamespaceAdmissionSelectorLabelGroups(groups []string) string {
+	formatted := make([]string, 0, len(groups))
+	for _, group := range groups {
+		formatted = append(formatted, group+"/*")
+	}
+	return strings.Join(formatted, ", ")
+}
+
+// ValidateNamespaceAdmissionSelectorLabelGroups validates the configured DNS
+// domains used as label key prefixes in namespace admission selectors.
+func ValidateNamespaceAdmissionSelectorLabelGroups(groups []string) error {
+	groups = namespaceAdmissionSelectorLabelGroupsOrDefault(groups)
+	for _, group := range groups {
+		if errs := utilvalidation.IsDNS1123Subdomain(group); len(errs) > 0 {
+			return fmt.Errorf("invalid namespace admission selector label group %q: %s", group, strings.Join(errs, "; "))
 		}
 	}
 	return nil

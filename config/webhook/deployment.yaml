@@ -41,6 +41,7 @@ spec:
             - --leader-elect=true
             - --tdg-migration=$(TDG_MIGRATION)
             - --capi-operator-update-bypass=$(CAPI_OPERATOR_UPDATE_BYPASS)
+            - --binddefinition-namespace-selector-label-group=$(BINDDEFINITION_NAMESPACE_SELECTOR_LABEL_GROUPS)
           image: controller:latest
           name: webhook
           env:
@@ -52,6 +53,8 @@ spec:
               value: "false"
             - name: CAPI_OPERATOR_UPDATE_BYPASS
               value: "false"
+            - name: BINDDEFINITION_NAMESPACE_SELECTOR_LABEL_GROUPS
+              value: "t-caas.telekom.com"
             - name: WEBHOOK_SERVICE_NAME
               value: "webhook-service"
             - name: WEBHOOK_SECRET_NAME

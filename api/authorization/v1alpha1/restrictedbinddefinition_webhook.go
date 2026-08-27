@@ -35,16 +35,21 @@ type RestrictedBindDefinitionValidator struct {
 	// enforcement. Admission-time policy assignment is a security boundary, so
 	// it must not fail open when the informer cache lags behind the API server.
 	Reader client.Reader
+	// AllowedNamespaceAdmissionSelectorLabelGroups contains DNS label key
+	// domains that may be used by namespace selectors. An empty value uses the
+	// default T-CaaS label domain.
+	AllowedNamespaceAdmissionSelectorLabelGroups []string
 }
 
 var _ admission.Validator[*RestrictedBindDefinition] = &RestrictedBindDefinitionValidator{}
 
 // SetupWebhookWithManager will setup the manager to manage the webhooks.
-func (r *RestrictedBindDefinition) SetupWebhookWithManager(mgr ctrl.Manager) error {
+func (r *RestrictedBindDefinition) SetupWebhookWithManager(mgr ctrl.Manager, allowedLabelGroups ...string) error {
 	return ctrl.NewWebhookManagedBy(mgr, r).
 		WithValidator(&RestrictedBindDefinitionValidator{
 			Client: mgr.GetClient(),
 			Reader: mgr.GetAPIReader(),
+			AllowedNamespaceAdmissionSelectorLabelGroups: namespaceAdmissionSelectorLabelGroupsOrDefault(allowedLabelGroups),
 		}).
 		Complete()
 }
@@ -224,7 +229,7 @@ func (v *RestrictedBindDefinitionValidator) validateRestrictedBindDefinitionSpec
 	if err := validateRestrictedBindDefinitionSubjects(kind, obj.Name, obj.Spec.Subjects); err != nil {
 		return err
 	}
-	if err := validateNamespaceBindings(kind, obj.Name, obj.Spec.RoleBindings); err != nil {
+	if err := validateNamespaceBindingsWithLabelGroups(kind, obj.Name, obj.Spec.RoleBindings, v.AllowedNamespaceAdmissionSelectorLabelGroups); err != nil {
 		return err
 	}
 	return v.validateRoleBindingNameCollisions(ctx, kind, obj)
