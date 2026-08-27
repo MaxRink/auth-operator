@@ -361,6 +361,17 @@ spec:
 					return checkResourceExists("serviceaccount", name, edgeCaseNS)
 				}, reconcileTimeout, pollInterval).Should(Succeed(), "auth-operator should create %s", name)
 			}
+			By("Verifying the initial generated ServiceAccount status before external takeover")
+			Eventually(func() bool {
+				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "binddefinition", ownershipBD,
+					"-o", "jsonpath={.status.generatedServiceAccounts}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return false
+				}
+				status := string(output)
+				return strings.Contains(status, ownershipHelmSA) && strings.Contains(status, ownershipUnknownSA)
+			}, reconcileTimeout, pollInterval).Should(BeTrue(), "initial status should report both generated ServiceAccounts")
 
 			By("Transferring the auth-owned label fields to Helm and another controller")
 			applyServerSideFieldManager(fmt.Sprintf(`
@@ -383,13 +394,17 @@ metadata:
     app.kubernetes.io/managed-by: ExternalController
 `, ownershipUnknownSA, edgeCaseNS), "unknown-controller", true)
 
-			By("Waiting for the owner watch to reconcile without stalling")
+			By("Waiting for the owner watch to report both transfers without stalling")
 			Eventually(func() bool {
 				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "binddefinition", ownershipBD,
-					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+					"-o", "jsonpath={.status.externalServiceAccounts}")
 				output, err := utils.Run(cmd)
-				return err == nil && strings.TrimSpace(string(output)) == statusTrue
-			}, reconcileTimeout, pollInterval).Should(BeTrue(), "ownership transfer must not stall the BindDefinition")
+				if err != nil {
+					return false
+				}
+				status := string(output)
+				return strings.Contains(status, ownershipHelmSA) && strings.Contains(status, ownershipUnknownSA)
+			}, reconcileTimeout, pollInterval).Should(BeTrue(), "owner watch should report both external ServiceAccounts")
 
 			By("Checking status, condition, and external references for both recipients")
 			cmd := utils.CommandContext(context.Background(), "kubectl", "get", "binddefinition", ownershipBD,
@@ -414,18 +429,28 @@ metadata:
 
 			By("Verifying owner references were removed while external managers retain labels")
 			for _, name := range []string{ownershipHelmSA, ownershipUnknownSA} {
+				expectedManager := map[string]string{ownershipHelmSA: "helm-controller", ownershipUnknownSA: "unknown-controller"}[name]
+				expectedManagedBy := map[string]string{ownershipHelmSA: "Helm", ownershipUnknownSA: "ExternalController"}[name]
 				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
 					"-o", "jsonpath={.metadata.ownerReferences}")
 				output, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(output)).NotTo(ContainSubstring(ownershipBD))
 				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
+					"-o", "jsonpath={.metadata.labels.app\\.kubernetes\\.io/managed-by}")
+				output, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(strings.TrimSpace(string(output))).To(Equal(expectedManagedBy))
+				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
 					"-o", "jsonpath={.metadata.managedFields[*].manager}")
 				output, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(string(output)).To(ContainSubstring(map[string]string{
-					ownershipHelmSA: "helm-controller", ownershipUnknownSA: "unknown-controller",
-				}[name]))
+				Expect(string(output)).To(ContainSubstring(expectedManager))
+				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
+					"-o", "jsonpath={.metadata.annotations.authorization\\.t-caas\\.telekom\\.com/external-field-managers}")
+				output, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(output)).To(ContainSubstring(expectedManager))
 			}
 
 			By("Verifying the generated binding still contains both ServiceAccount subjects")
