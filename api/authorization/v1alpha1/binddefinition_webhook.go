@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -482,6 +483,14 @@ func isLabelSelectorEmpty(selector *metav1.LabelSelector) bool {
 	return selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0)
 }
 
+func isAllowedNamespaceAdmissionSelectorKey(key string) bool {
+	return key == LabelKeyOwner ||
+		key == LabelKeyTenant ||
+		key == LabelKeyThirdParty ||
+		key == corev1.LabelMetadataName ||
+		strings.HasPrefix(key, WellKnownNamespaceLabelPrefix)
+}
+
 func validateNamespaceBindings(kind schema.GroupKind, name string, bindings []NamespaceBinding) error {
 	for i, binding := range bindings {
 		if (len(binding.ClusterRoleRefs) > 0 || len(binding.RoleRefs) > 0) &&
@@ -518,25 +527,25 @@ func validateNamespaceBindings(kind schema.GroupKind, name string, bindings []Na
 						err.Error())})
 			}
 			for key := range selector.MatchLabels {
-				if key != LabelKeyOwner && key != LabelKeyTenant && key != LabelKeyThirdParty && key != corev1.LabelMetadataName {
+				if !isAllowedNamespaceAdmissionSelectorKey(key) {
 					return apierrors.NewInvalid(
 						kind,
 						name,
 						field.ErrorList{field.Invalid(
 							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchLabels").Key(key),
 							key,
-							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+") or "+corev1.LabelMetadataName)})
+							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or well-known T-CaaS labels matching "+WellKnownNamespaceLabelPrefix+"*")})
 				}
 			}
 			for _, expr := range selector.MatchExpressions {
-				if expr.Key != LabelKeyOwner && expr.Key != LabelKeyTenant && expr.Key != LabelKeyThirdParty && expr.Key != corev1.LabelMetadataName {
+				if !isAllowedNamespaceAdmissionSelectorKey(expr.Key) {
 					return apierrors.NewInvalid(
 						kind,
 						name,
 						field.ErrorList{field.Invalid(
 							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchExpressions").Key(expr.Key),
 							expr.Key,
-							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+") or "+corev1.LabelMetadataName)})
+							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or well-known T-CaaS labels matching "+WellKnownNamespaceLabelPrefix+"*")})
 				}
 			}
 		}

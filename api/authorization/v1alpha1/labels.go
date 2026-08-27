@@ -4,6 +4,13 @@ package v1alpha1
 // These labels are used by the namespace webhooks to control access
 // and inject ownership metadata.
 const (
+	// LabelKeyProtected classifies namespaces that require the protected persona.
+	LabelKeyProtected = "t-caas.telekom.com/protected"
+
+	// WellKnownNamespaceLabelPrefix identifies well-known T-CaaS namespace labels
+	// that may be used by BindDefinition namespace admission selectors.
+	WellKnownNamespaceLabelPrefix = "t-caas.telekom.com/"
+
 	// LabelKeyOwner identifies the owner type of a namespace (platform, tenant, or thirdparty).
 	LabelKeyOwner = "t-caas.telekom.com/owner"
 
