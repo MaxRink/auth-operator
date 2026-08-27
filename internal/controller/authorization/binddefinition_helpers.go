@@ -579,10 +579,7 @@ func (r *BindDefinitionReconciler) detachServiceAccountFromBindDefinition(
 			return nil
 		}
 
-		if err := r.client.Patch(ctx, fresh, sigs_client.MergeFromWithOptions(orig, sigs_client.MergeFromWithOptimisticLock{})); err != nil {
-			return err
-		}
-		return nil
+		return r.client.Patch(ctx, fresh, sigs_client.MergeFromWithOptions(orig, sigs_client.MergeFromWithOptimisticLock{}))
 	})
 }
 

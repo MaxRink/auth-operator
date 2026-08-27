@@ -1417,33 +1417,14 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 
 		saExists := err == nil
 		saKey := subject.Namespace + "/" + subject.Name
-		if _, explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
-			if !saExists {
-				bindDef.Status.SkippedServiceAccounts = append(bindDef.Status.SkippedServiceAccounts,
-					fmt.Sprintf("%s: not found (creation opted out)", saKey))
-				logger.Info("Skipping explicitly external ServiceAccount because it does not exist",
-					"bindDefinitionName", bindDef.Name, "serviceAccount", subject.Name,
-					"namespace", subject.Namespace)
-				continue
+		if explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
+			handled, err := r.handleExplicitlyExternalServiceAccount(ctx, bindDef, subject, existing, saExists)
+			if err != nil {
+				return nil, nil, err
 			}
-
-			// An older reconciliation may have added this BD's owner/source
-			// metadata before the reference was opted out. Remove only metadata
-			// that identifies this BD, then leave all provider-owned fields alone.
-			if err := r.detachServiceAccountFromBindDefinition(ctx, existing, bindDef); err != nil {
-				return nil, nil, fmt.Errorf("detach opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+			if handled {
+				externalSAs = append(externalSAs, saKey)
 			}
-			if err := r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing); err != nil {
-				return nil, nil, fmt.Errorf("refresh opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
-			}
-			externalSAs = append(externalSAs, saKey)
-			if err := r.addExternalSAReference(ctx, existing, bindDef.Name); err != nil {
-				return nil, nil, fmt.Errorf("track opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
-			}
-			r.recorder.Eventf(bindDef, nil, corev1.EventTypeNormal,
-				authorizationv1alpha1.EventReasonExternalSATracked, authorizationv1alpha1.EventActionReconcile,
-				"Using explicitly external ServiceAccount %s/%s; creation and ownership are delegated to another controller",
-				subject.Namespace, subject.Name)
 			continue
 		}
 		isLegit := false
@@ -1501,6 +1482,46 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 		"bindDefinitionName", bindDef.Name, "generatedSAs", len(generatedSAs), "externalSAs", len(externalSAs))
 
 	return generatedSAs, externalSAs, nil
+}
+
+// handleExplicitlyExternalServiceAccount applies the per-subject lifecycle
+// opt-out. It returns handled=true for an existing external ServiceAccount;
+// missing references are recorded in status and return handled=false.
+func (r *BindDefinitionReconciler) handleExplicitlyExternalServiceAccount(
+	ctx context.Context,
+	bindDef *authorizationv1alpha1.BindDefinition,
+	subject rbacv1.Subject,
+	existing *corev1.ServiceAccount,
+	saExists bool,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+	saKey := subject.Namespace + "/" + subject.Name
+	if !saExists {
+		bindDef.Status.SkippedServiceAccounts = append(bindDef.Status.SkippedServiceAccounts,
+			fmt.Sprintf("%s: not found (creation opted out)", saKey))
+		logger.Info("Skipping explicitly external ServiceAccount because it does not exist",
+			"bindDefinitionName", bindDef.Name, "serviceAccount", subject.Name,
+			"namespace", subject.Namespace)
+		return false, nil
+	}
+
+	// An older reconciliation may have added this BD's owner/source metadata
+	// before the reference was opted out. Remove only metadata that identifies
+	// this BD, then leave all provider-owned fields alone.
+	if err := r.detachServiceAccountFromBindDefinition(ctx, existing, bindDef); err != nil {
+		return false, fmt.Errorf("detach opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	if err := r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing); err != nil {
+		return false, fmt.Errorf("refresh opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	if err := r.addExternalSAReference(ctx, existing, bindDef.Name); err != nil {
+		return false, fmt.Errorf("track opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	r.recorder.Eventf(bindDef, nil, corev1.EventTypeNormal,
+		authorizationv1alpha1.EventReasonExternalSATracked, authorizationv1alpha1.EventActionReconcile,
+		"Using explicitly external ServiceAccount %s/%s; creation and ownership are delegated to another controller",
+		subject.Namespace, subject.Name)
+	return true, nil
 }
 
 // applyStatus applies status updates using Server-Side Apply (SSA).
