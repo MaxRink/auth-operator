@@ -1410,12 +1410,11 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 		// SAs owned by another BindDefinition are updated via SSA to add this BD's
 		// ownerRef, enabling shared ownership for proper GC lifecycle.
 		existing := &corev1.ServiceAccount{}
-		err = r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return nil, nil, fmt.Errorf("get ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+		saExists, err := r.getServiceAccount(ctx, subject, existing)
+		if err != nil {
+			return nil, nil, err
 		}
 
-		saExists := err == nil
 		saKey := subject.Namespace + "/" + subject.Name
 		if _, explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
 			handled, err := r.handleExplicitlyExternalServiceAccount(ctx, bindDef, subject, existing, saExists)
@@ -1482,6 +1481,21 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 		"bindDefinitionName", bindDef.Name, "generatedSAs", len(generatedSAs), "externalSAs", len(externalSAs))
 
 	return generatedSAs, externalSAs, nil
+}
+
+func (r *BindDefinitionReconciler) getServiceAccount(
+	ctx context.Context,
+	subject rbacv1.Subject,
+	existing *corev1.ServiceAccount,
+) (bool, error) {
+	err := r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	return true, nil
 }
 
 // handleExplicitlyExternalServiceAccount applies the per-subject lifecycle
