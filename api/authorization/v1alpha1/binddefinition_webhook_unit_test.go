@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -249,6 +250,61 @@ func TestBindDefinitionValidatorRejectsRequiredAndSubjectShape(t *testing.T) {
 				if !strings.Contains(got, want) {
 					t.Fatalf("expected error to contain %q, got %q", want, got)
 				}
+			}
+		})
+	}
+}
+
+func TestValidateNamespaceBindingsAllowsWellKnownTCAASLabels(t *testing.T) {
+	testCases := []struct {
+		name      string
+		selector  metav1.LabelSelector
+		wantError bool
+	}{
+		{
+			name: "protected match expression",
+			selector: metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      LabelKeyProtected,
+				Operator: metav1.LabelSelectorOpDoesNotExist,
+			}}},
+		},
+		{
+			name: "well-known domain match label",
+			selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"t-caas.telekom.com/quarantine": "true",
+			}},
+		},
+		{
+			name: "lookalike t-caas domain",
+			selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"not-t-caas.telekom.com/protected": "true",
+			}},
+			wantError: true,
+		},
+		{
+			name: "matching path outside t-caas domain",
+			selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"example.com/protected": "true",
+			}},
+			wantError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateNamespaceBindings(
+				schema.GroupKind{Group: GroupVersion.Group, Kind: BindDefinitionKind},
+				"test-binddefinition",
+				[]NamespaceBinding{{
+					ClusterRoleRefs:   []string{"view"},
+					NamespaceSelector: []metav1.LabelSelector{tc.selector},
+				}},
+			)
+			if tc.wantError && err == nil {
+				t.Fatal("expected selector validation error, got nil")
+			}
+			if !tc.wantError && err != nil {
+				t.Fatalf("expected selector to be allowed, got %v", err)
 			}
 		})
 	}
