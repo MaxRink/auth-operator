@@ -9,7 +9,7 @@ const (
 
 	// WellKnownNamespaceLabelPrefix identifies well-known T-CaaS namespace labels
 	// that may be used by BindDefinition namespace admission selectors.
-	WellKnownNamespaceLabelPrefix = "t-caas.telekom.com/"
+	WellKnownNamespaceLabelPrefix = DefaultNamespaceAdmissionSelectorLabelGroup + "/"
 
 	// DefaultNamespaceAdmissionSelectorLabelGroup is the label key domain
 	// allowed by default in BindDefinition namespace selectors.

@@ -242,7 +242,7 @@ the assignment.
 | `--cert-rotation-mutating-webhook` | Mutating webhook names to patch with CA bundle | `[]` |
 | `--cert-rotation-validating-webhook` | Validating webhook names to patch with CA bundle | `[]` |
 | `--tdg-migration` | Enable T-DDI to T-CaaS migration mode | `false` |
-| `--binddefinition-namespace-selector-label-group` | DNS label key domain allowed in BindDefinition namespace admission selectors; repeat for multiple domains | `[t-caas.telekom.com]` |
+| `--binddefinition-namespace-selector-label-group` | DNS label key domain allowed in BindDefinition namespace admission selectors; repeat or comma-separate for multiple domains | `[t-caas.telekom.com]` |
 | `--authorize-rate-limit` | Per-pod sustained requests/second for authorize endpoint | `0` |
 | `--authorize-rate-burst` | Burst size for authorize endpoint rate limiter | `200` |
 | `--authorize-auth-token-file` | Bearer-token file required by `/authorize` callers | `""` |

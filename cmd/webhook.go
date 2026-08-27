@@ -392,7 +392,7 @@ func init() {
 			"Insecure; use only for development or temporary migration.")
 	webhookCmd.Flags().StringSliceVar(&bindDefinitionNamespaceSelectorLabelGroups, "binddefinition-namespace-selector-label-group",
 		[]string{authorizationv1alpha1.DefaultNamespaceAdmissionSelectorLabelGroup},
-		"DNS label group allowed in BindDefinition namespace admission selectors; repeat to allow multiple groups")
+		"DNS label group allowed in BindDefinition namespace admission selectors; repeat or comma-separate to allow multiple groups")
 
 	webhookCmd.Flags().BoolVar(&webhookLeaderElect, "leader-elect", false,
 		"Enable leader election for the webhook manager. Required when running "+
