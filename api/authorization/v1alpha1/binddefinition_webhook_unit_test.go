@@ -269,6 +269,12 @@ func TestValidateNamespaceBindingsAllowsWellKnownTCAASLabels(t *testing.T) {
 			}}},
 		},
 		{
+			name: "protected match label",
+			selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				LabelKeyProtected: "true",
+			}},
+		},
+		{
 			name: "well-known domain match label",
 			selector: metav1.LabelSelector{MatchLabels: map[string]string{
 				"t-caas.telekom.com/quarantine": "true",
