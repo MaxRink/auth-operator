@@ -94,6 +94,11 @@ func (in *BindDefinitionSpec) DeepCopyInto(out *BindDefinitionSpec) {
 		*out = make([]rbacv1.Subject, len(*in))
 		copy(*out, *in)
 	}
+	if in.ExternalServiceAccountRefs != nil {
+		in, out := &in.ExternalServiceAccountRefs, &out.ExternalServiceAccountRefs
+		*out = make([]SARef, len(*in))
+		copy(*out, *in)
+	}
 	in.ClusterRoleBindings.DeepCopyInto(&out.ClusterRoleBindings)
 	if in.RoleBindings != nil {
 		in, out := &in.RoleBindings, &out.RoleBindings
@@ -134,6 +139,11 @@ func (in *BindDefinitionStatus) DeepCopyInto(out *BindDefinitionStatus) {
 	}
 	if in.ExternalServiceAccounts != nil {
 		in, out := &in.ExternalServiceAccounts, &out.ExternalServiceAccounts
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.SkippedServiceAccounts != nil {
+		in, out := &in.SkippedServiceAccounts, &out.SkippedServiceAccounts
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

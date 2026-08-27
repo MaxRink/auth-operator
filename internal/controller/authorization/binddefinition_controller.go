@@ -535,7 +535,6 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		metrics.ReconcileErrors.WithLabelValues(metrics.ControllerBindDefinition, metrics.ErrorTypeAPI).Inc()
 		return ctrl.Result{}, err
 	}
-
 	if len(missingTargetNamespaces) > 0 {
 		requeueAfter := DefaultRequeueInterval
 		markRoleRefsInvalid := missingRoleRefCount == 0
@@ -543,6 +542,23 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			requeueAfter = calculateMissingRoleRefBackoff(bindDefinition)
 		}
 		return r.handleMissingTargetNamespaces(ctx, bindDefinition, missingTargetNamespaces, markRoleRefsInvalid, requeueAfter)
+	}
+
+	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
+		requeueAfter := skippedServiceAccountRequeueAfter(bindDefinition, missingRoleRefCount)
+		conditions.MarkNotReady(bindDefinition, bindDefinition.Generation,
+			authorizationv1alpha1.ServiceAccountRefsSkippedReason,
+			authorizationv1alpha1.ServiceAccountRefsSkippedMessage,
+			bindDefinition.Status.SkippedServiceAccounts)
+		bindDefinition.Status.BindReconciled = false
+		r.recorder.Eventf(bindDefinition, nil, corev1.EventTypeWarning,
+			authorizationv1alpha1.EventReasonServiceAccountSkipped, authorizationv1alpha1.EventActionValidate,
+			"ServiceAccount subjects were skipped and not created: %v", bindDefinition.Status.SkippedServiceAccounts)
+		if err := r.applyStatus(ctx, bindDefinition); err != nil {
+			return ctrl.Result{}, fmt.Errorf("apply BindDefinition status for skipped ServiceAccounts: %w", err)
+		}
+		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// Mark Ready and apply final status via SSA (kstatus)
@@ -637,6 +653,16 @@ func (r *BindDefinitionReconciler) handleMissingRoleRefsError(
 	r.markStalled(ctx, bindDefinition, err)
 	metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
 	return ctrl.Result{RequeueAfter: RoleRefRequeueInterval}, nil
+}
+
+func skippedServiceAccountRequeueAfter(bindDefinition *authorizationv1alpha1.BindDefinition, missingRoleRefCount int) time.Duration {
+	if missingRoleRefCount == 0 {
+		return DefaultRequeueInterval
+	}
+
+	// Keep the normal opt-out retry cadence as a floor, while honoring
+	// exponential backoff once missing role references persist.
+	return max(DefaultRequeueInterval, calculateMissingRoleRefBackoff(bindDefinition))
 }
 
 // calculateMissingRoleRefBackoff returns an exponential backoff duration for
@@ -762,7 +788,7 @@ func (r *BindDefinitionReconciler) reconcileResources(
 	if err := r.pruneStaleServiceAccounts(
 		ctx,
 		bindDefinition,
-		bindDefinitionDesiredServiceAccounts(generatedSAs),
+		bindDefinitionDesiredServiceAccountsWithExternalRefs(generatedSAs, bindDefinition.Spec.ExternalServiceAccountRefs),
 		previousGeneratedSAs,
 	); err != nil {
 		return 0, fmt.Errorf("prune stale ServiceAccounts: %w", err)
@@ -770,6 +796,14 @@ func (r *BindDefinitionReconciler) reconcileResources(
 	bindDefinition.Status.GeneratedServiceAccounts = generatedSAs
 	// Update status with external (pre-existing) ServiceAccounts
 	bindDefinition.Status.ExternalServiceAccounts = externalSAs
+	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
+		conditions.MarkFalse(bindDefinition, authorizationv1alpha1.ServiceAccountRefsReadyCondition, bindDefinition.Generation,
+			authorizationv1alpha1.ServiceAccountRefsSkippedReason,
+			authorizationv1alpha1.ServiceAccountRefsSkippedMessage, bindDefinition.Status.SkippedServiceAccounts)
+	} else {
+		conditions.MarkTrue(bindDefinition, authorizationv1alpha1.ServiceAccountRefsReadyCondition, bindDefinition.Generation,
+			authorizationv1alpha1.ServiceAccountRefsReadyReason, authorizationv1alpha1.ServiceAccountRefsReadyMessage)
+	}
 	// Update metric for external SAs count
 	metrics.ExternalSAsReferenced.WithLabelValues(bindDefinition.Name).Set(float64(len(externalSAs)))
 
@@ -1202,6 +1236,20 @@ func bindDefinitionDesiredServiceAccounts(subjects []rbacv1.Subject) map[string]
 	return desired
 }
 
+func bindDefinitionDesiredServiceAccountsWithExternalRefs(
+	subjects []rbacv1.Subject,
+	externalRefs []authorizationv1alpha1.SARef,
+) map[string]struct{} {
+	desired := bindDefinitionDesiredServiceAccounts(subjects)
+	for _, ref := range externalRefs {
+		if ref.Namespace == "" || ref.Name == "" {
+			continue
+		}
+		desired[ref.Namespace+"/"+ref.Name] = struct{}{}
+	}
+	return desired
+}
+
 func (r *BindDefinitionReconciler) pruneStaleServiceAccounts(
 	ctx context.Context,
 	bindDef *authorizationv1alpha1.BindDefinition,
@@ -1354,6 +1402,11 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 	logger := log.FromContext(ctx)
 	var generatedSAs []rbacv1.Subject
 	var externalSAs []string
+	bindDef.Status.SkippedServiceAccounts = nil
+	externalRefs := make(map[string]struct{}, len(bindDef.Spec.ExternalServiceAccountRefs))
+	for _, ref := range bindDef.Spec.ExternalServiceAccountRefs {
+		externalRefs[ref.Namespace+"/"+ref.Name] = struct{}{}
+	}
 
 	// Use the configured value from spec, defaulting to true for backward compatibility
 	automountToken := ptr.Deref(bindDef.Spec.AutomountServiceAccountToken, true)
@@ -1369,6 +1422,10 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 			return nil, nil, err
 		}
 		if ns == nil {
+			if _, explicitlyExternal := externalRefs[subject.Namespace+"/"+subject.Name]; explicitlyExternal {
+				bindDef.Status.SkippedServiceAccounts = append(bindDef.Status.SkippedServiceAccounts,
+					fmt.Sprintf("%s/%s: namespace unavailable (creation opted out)", subject.Namespace, subject.Name))
+			}
 			continue // Namespace not found or terminating, logged in validateServiceAccountNamespace
 		}
 
@@ -1378,12 +1435,22 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 		// SAs owned by another BindDefinition are updated via SSA to add this BD's
 		// ownerRef, enabling shared ownership for proper GC lifecycle.
 		existing := &corev1.ServiceAccount{}
-		err = r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return nil, nil, fmt.Errorf("get ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+		saExists, err := r.getServiceAccount(ctx, subject, existing)
+		if err != nil {
+			return nil, nil, err
 		}
 
-		saExists := err == nil
+		saKey := subject.Namespace + "/" + subject.Name
+		if _, explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
+			handled, err := r.handleExplicitlyExternalServiceAccount(ctx, bindDef, subject, existing, saExists)
+			if err != nil {
+				return nil, nil, err
+			}
+			if handled {
+				externalSAs = append(externalSAs, saKey)
+			}
+			continue
+		}
 		isLegit := false
 		if saExists {
 			var legitErr error
@@ -1441,6 +1508,55 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 	return generatedSAs, externalSAs, nil
 }
 
+func (r *BindDefinitionReconciler) getServiceAccount(
+	ctx context.Context,
+	subject rbacv1.Subject,
+	existing *corev1.ServiceAccount,
+) (bool, error) {
+	err := r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	return true, nil
+}
+
+// handleExplicitlyExternalServiceAccount applies the per-subject lifecycle
+// opt-out. It returns handled=true for an existing external ServiceAccount;
+// missing references are recorded in status and return handled=false.
+func (r *BindDefinitionReconciler) handleExplicitlyExternalServiceAccount(
+	ctx context.Context,
+	bindDef *authorizationv1alpha1.BindDefinition,
+	subject rbacv1.Subject,
+	existing *corev1.ServiceAccount,
+	saExists bool,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+	saKey := subject.Namespace + "/" + subject.Name
+	if !saExists {
+		bindDef.Status.SkippedServiceAccounts = append(bindDef.Status.SkippedServiceAccounts,
+			fmt.Sprintf("%s: not found (creation opted out)", saKey))
+		logger.Info("Skipping explicitly external ServiceAccount because it does not exist",
+			"bindDefinitionName", bindDef.Name, "serviceAccount", subject.Name,
+			"namespace", subject.Namespace)
+		return false, nil
+	}
+
+	// An older reconciliation may have added this BD's owner/source metadata
+	// before the reference was opted out. Remove only metadata that identifies
+	// this BD, then leave all provider-owned fields alone.
+	if err := r.detachServiceAccountFromBindDefinition(ctx, existing, bindDef); err != nil {
+		return false, fmt.Errorf("detach opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
+	}
+	r.recorder.Eventf(bindDef, nil, corev1.EventTypeNormal,
+		authorizationv1alpha1.EventReasonExternalSATracked, authorizationv1alpha1.EventActionReconcile,
+		"Using explicitly external ServiceAccount %s/%s; creation and ownership are delegated to another controller",
+		subject.Namespace, subject.Name)
+	return true, nil
+}
+
 // applyStatus applies status updates using Server-Side Apply (SSA).
 // It compares the desired status against the informer cache and skips the
 // API call when nothing has changed, reducing API-server load.
@@ -1479,6 +1595,14 @@ func (r *BindDefinitionReconciler) reconcileDelete(
 	// Clean up tracking annotations from external ServiceAccounts
 	if err := r.cleanupExternalSAReferences(ctx, bindDefinition); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleanup external ServiceAccount references for BindDefinition %s: %w", bindDefinition.Name, err)
+	}
+
+	// An opt-out may have been added after this BindDefinition last reconciled.
+	// Detach historical owner/source metadata before excluding explicit refs from
+	// deletion cleanup, otherwise garbage collection could delete an externally
+	// managed ServiceAccount when the finalizer is removed.
+	if err := r.detachExplicitExternalServiceAccounts(ctx, bindDefinition); err != nil {
+		return ctrl.Result{}, fmt.Errorf("detach explicitly external ServiceAccounts for BindDefinition %s: %w", bindDefinition.Name, err)
 	}
 
 	// Delete ServiceAccounts
@@ -1555,9 +1679,48 @@ func (r *BindDefinitionReconciler) deleteSubjectServiceAccounts(
 	return nil
 }
 
+func (r *BindDefinitionReconciler) detachExplicitExternalServiceAccounts(
+	ctx context.Context,
+	bindDef *authorizationv1alpha1.BindDefinition,
+) error {
+	var detachErrors []error
+	seen := make(map[string]struct{}, len(bindDef.Spec.ExternalServiceAccountRefs))
+	reader := r.reader
+	if reader == nil {
+		reader = r.client
+	}
+	for _, ref := range bindDef.Spec.ExternalServiceAccountRefs {
+		if ref.Namespace == "" || ref.Name == "" {
+			continue
+		}
+		key := ref.Namespace + "/" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		sa := &corev1.ServiceAccount{}
+		if err := reader.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			detachErrors = append(detachErrors, fmt.Errorf("get ServiceAccount %s: %w", key, err))
+			continue
+		}
+		if err := r.detachServiceAccountFromBindDefinition(ctx, sa, bindDef); err != nil {
+			detachErrors = append(detachErrors, fmt.Errorf("detach ServiceAccount %s: %w", key, err))
+		}
+	}
+	return errors.Join(detachErrors...)
+}
+
 func bindDefinitionServiceAccountsForDeletion(bindDef *authorizationv1alpha1.BindDefinition) []rbacv1.Subject {
 	subjects := make([]rbacv1.Subject, 0, len(bindDef.Spec.Subjects)+len(bindDef.Status.GeneratedServiceAccounts))
 	seen := make(map[string]struct{}, len(bindDef.Spec.Subjects)+len(bindDef.Status.GeneratedServiceAccounts))
+	externalRefs := make(map[string]struct{}, len(bindDef.Spec.ExternalServiceAccountRefs))
+	for _, ref := range bindDef.Spec.ExternalServiceAccountRefs {
+		externalRefs[ref.Namespace+"/"+ref.Name] = struct{}{}
+	}
 	add := func(subject rbacv1.Subject) {
 		if subject.Kind != authorizationv1alpha1.BindSubjectServiceAccount {
 			return
@@ -1566,6 +1729,9 @@ func bindDefinitionServiceAccountsForDeletion(bindDef *authorizationv1alpha1.Bin
 			return
 		}
 		key := subject.Namespace + "/" + subject.Name
+		if _, explicitlyExternal := externalRefs[key]; explicitlyExternal {
+			return
+		}
 		if _, ok := seen[key]; ok {
 			return
 		}

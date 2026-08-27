@@ -4054,6 +4054,250 @@ func TestBindDefinitionPruneStaleServiceAccounts(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
+func TestBindDefinitionManagedToExternalTransitionPreservesServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "managed-to-external-bd",
+			UID:        "managed-to-external-bd-uid",
+			Generation: 2,
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "managed-to-external",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+		},
+		Status: authorizationv1alpha1.BindDefinitionStatus{
+			GeneratedServiceAccounts: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name:      "provider-sa",
+		Namespace: "provider-ns",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       authorizationv1alpha1.BindDefinitionKind,
+			Name:       bd.Name,
+			UID:        bd.UID,
+		}},
+		Annotations: map[string]string{
+			helpers.SourceKindAnnotation:  authorizationv1alpha1.BindDefinitionKind,
+			helpers.SourceNamesAnnotation: bd.Name,
+		},
+	}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "provider-ns"}}
+	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, sa, ns, role).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, reader: c, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var preserved corev1.ServiceAccount
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: sa.Name, Namespace: sa.Namespace}, &preserved)).To(Succeed())
+	g.Expect(preserved.OwnerReferences).To(BeEmpty())
+	g.Expect(preserved.Annotations).NotTo(HaveKey(helpers.SourceKindAnnotation))
+	g.Expect(preserved.Annotations).NotTo(HaveKey(helpers.SourceNamesAnnotation))
+
+	var updated authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: bd.Name}, &updated)).To(Succeed())
+	g.Expect(updated.Status.ExternalServiceAccounts).To(ConsistOf("provider-ns/provider-sa"))
+}
+
+func TestBindDefinitionDeleteDetachesExplicitExternalServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "delete-external-bd",
+			UID:        "delete-external-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "delete-external",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name:      "provider-sa",
+		Namespace: "provider-ns",
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       authorizationv1alpha1.BindDefinitionKind,
+			Name:       bd.Name,
+			UID:        bd.UID,
+		}},
+		Annotations: map[string]string{
+			helpers.SourceKindAnnotation:  authorizationv1alpha1.BindDefinitionKind,
+			helpers.SourceNamesAnnotation: bd.Name,
+		},
+	}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, sa).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, reader: c, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	g.Expect(c.Delete(ctx, bd)).To(Succeed())
+	var deleting authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)).To(Succeed())
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var preserved corev1.ServiceAccount
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: sa.Name, Namespace: sa.Namespace}, &preserved)).To(Succeed())
+	g.Expect(preserved.OwnerReferences).To(BeEmpty())
+	g.Expect(preserved.Annotations).NotTo(HaveKey(helpers.SourceKindAnnotation))
+	g.Expect(preserved.Annotations).NotTo(HaveKey(helpers.SourceNamesAnnotation))
+	err = c.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+func TestBindDefinitionManagedToExternalTransitionWithStaleCachePreservesLiveServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "stale-cache-external-bd",
+			UID:        "stale-cache-external-bd-uid",
+			Generation: 2,
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "stale-cache-external",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+		},
+		Status: authorizationv1alpha1.BindDefinitionStatus{
+			GeneratedServiceAccounts: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	owner := metav1.OwnerReference{
+		APIVersion: authorizationv1alpha1.GroupVersion.String(),
+		Kind:       authorizationv1alpha1.BindDefinitionKind,
+		Name:       bd.Name,
+		UID:        bd.UID,
+	}
+	providerLabels := map[string]string{"app.kubernetes.io/managed-by": "Helm"}
+	// The cached client is one observation behind and still reports the old
+	// owner. The live API reader already reflects the provider's ownership.
+	cachedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: "provider-sa", Namespace: "provider-ns", OwnerReferences: []metav1.OwnerReference{owner}, Labels: providerLabels,
+	}}
+	liveSA := cachedSA.DeepCopy()
+	liveSA.OwnerReferences = nil
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "provider-ns"}}
+	role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}}
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, cachedSA, ns, role).
+		WithStatusSubresource(bd).
+		Build()
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveSA).Build()
+	r := &BindDefinitionReconciler{client: cached, reader: live, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var cachedAfter corev1.ServiceAccount
+	g.Expect(cached.Get(ctx, types.NamespacedName{Name: cachedSA.Name, Namespace: cachedSA.Namespace}, &cachedAfter)).To(Succeed())
+	// The stale cache copy must not be deleted by pruning merely because the
+	// live reader observed the provider-owned object as already detached.
+	g.Expect(cachedAfter.Labels).To(Equal(providerLabels))
+	var liveAfter corev1.ServiceAccount
+	g.Expect(live.Get(ctx, types.NamespacedName{Name: liveSA.Name, Namespace: liveSA.Namespace}, &liveAfter)).To(Succeed())
+	g.Expect(liveAfter.OwnerReferences).To(BeEmpty())
+}
+
+func TestBindDefinitionDeleteWithStaleCachePreservesLiveExternalServiceAccount(t *testing.T) {
+	ctx := context.Background()
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(scheme)
+	_ = rbacv1.SchemeBuilder.AddToScheme(scheme)
+	_ = corev1.SchemeBuilder.AddToScheme(scheme)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "stale-cache-delete-bd",
+			UID:        "stale-cache-delete-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "stale-cache-delete",
+			Subjects:                   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "provider-sa", Namespace: "provider-ns"}},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "provider-sa", Namespace: "provider-ns"}},
+		},
+	}
+	owner := metav1.OwnerReference{
+		APIVersion: authorizationv1alpha1.GroupVersion.String(),
+		Kind:       authorizationv1alpha1.BindDefinitionKind,
+		Name:       bd.Name,
+		UID:        bd.UID,
+	}
+	// The informer cache still sees the historical owner, while the live API
+	// has already detached it (for example after a rapid opt-out update).
+	cachedSA := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+		Name: "provider-sa", Namespace: "provider-ns", OwnerReferences: []metav1.OwnerReference{owner},
+	}}
+	liveSA := cachedSA.DeepCopy()
+	liveSA.OwnerReferences = nil
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(bd, cachedSA).
+		WithStatusSubresource(bd).
+		Build()
+	live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveSA).Build()
+	r := &BindDefinitionReconciler{client: cached, reader: live, scheme: scheme, recorder: events.NewFakeRecorder(20)}
+
+	g.Expect(cached.Delete(ctx, bd)).To(Succeed())
+	var deleting authorizationv1alpha1.BindDefinition
+	g.Expect(cached.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)).To(Succeed())
+	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// The explicit reference was present in spec but absent from status, so the
+	// deletion path must still avoid deleting it and must complete finalization.
+	var preserved corev1.ServiceAccount
+	g.Expect(live.Get(ctx, types.NamespacedName{Name: liveSA.Name, Namespace: liveSA.Namespace}, &preserved)).To(Succeed())
+	g.Expect(preserved.OwnerReferences).To(BeEmpty())
+	err = cached.Get(ctx, types.NamespacedName{Name: bd.Name}, &deleting)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
 func TestBindDefinitionReconcilePrunesSelectorStaleRoleBinding(t *testing.T) {
 	ctx := context.Background()
 	g := NewWithT(t)
@@ -5350,6 +5594,119 @@ func TestReconcile_MissingExplicitRoleBindingNamespaceNotReady(t *testing.T) {
 	g.Expect(roleRefCond.Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(roleRefCond.Reason).To(Equal(string(authorizationv1alpha1.TargetNamespaceNotFoundReason)))
 	g.Expect(roleRefCond.Message).To(ContainSubstring("missing-ns"))
+}
+
+func TestReconcile_MissingTargetNamespaceAlsoReportsSkippedExternalServiceAccount(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	s := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	clusterRole := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}}
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       "BindDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "missing-ns-external-sa-bd",
+			UID:        "missing-ns-external-sa-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName: "missing-ns-external-sa-target",
+			Subjects: []rbacv1.Subject{
+				{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+			},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "external-sa", Namespace: "external-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+			RoleBindings: []authorizationv1alpha1.NamespaceBinding{{
+				Namespace:       "missing-ns",
+				ClusterRoleRefs: []string{"view"},
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(bd, clusterRole).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(10)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(DefaultRequeueInterval))
+
+	var updated authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, types.NamespacedName{Name: bd.Name}, &updated)).To(Succeed())
+	g.Expect(updated.Status.GeneratedServiceAccounts).To(BeEmpty())
+	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("external-ns/external-sa: namespace unavailable (creation opted out)"))
+	g.Expect(updated.Status.BindReconciled).To(BeFalse())
+
+	serviceAccountRefsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
+	g.Expect(serviceAccountRefsReady).NotTo(BeNil())
+	g.Expect(serviceAccountRefsReady.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(serviceAccountRefsReady.Reason).To(Equal(string(authorizationv1alpha1.ServiceAccountRefsSkippedReason)))
+
+	ready := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ReadyCondition))
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(ready.Reason).To(Equal(string(authorizationv1alpha1.TargetNamespaceNotFoundReason)))
+	g.Expect(ready.Message).To(ContainSubstring("missing-ns"))
+}
+
+func TestReconcile_SkippedExternalServiceAccountHonorsMissingRoleBackoff(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	s := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       "BindDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "missing-role-external-sa-bd",
+			UID:        "missing-role-external-sa-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName: "missing-role-external-sa-target",
+			Subjects: []rbacv1.Subject{
+				{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+			},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "external-sa", Namespace: "external-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"missing-role"}},
+			RoleBindings:               nil,
+		},
+		Status: authorizationv1alpha1.BindDefinitionStatus{
+			Conditions: []metav1.Condition{{
+				Type:               string(authorizationv1alpha1.RoleRefValidCondition),
+				Status:             metav1.ConditionFalse,
+				Reason:             string(authorizationv1alpha1.RoleRefInvalidReason),
+				Message:            fmt.Sprintf(string(authorizationv1alpha1.RoleRefInvalidMessage), []string{"ClusterRole/missing-role"}),
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(bd, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "external-ns"}}).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(10)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(roleRefRequeueMax),
+		"a skipped external ServiceAccount must not bypass missing-role exponential backoff")
 }
 
 func TestReconcile_MissingExplicitNamespacePreservesMissingRoleRefs(t *testing.T) {

@@ -86,6 +86,30 @@ spec:
                     maxItems: 64
                     type: array
                 type: object
+              externalServiceAccountRefs:
+                description: |-
+                  ExternalServiceAccountRefs lists ServiceAccounts that are referenced by
+                  this BindDefinition but must be provisioned and managed by another
+                  controller. Listed ServiceAccounts are never created, adopted, updated,
+                  or deleted by the auth operator. An existing historical owner reference
+                  belonging to this BindDefinition is removed safely during reconciliation.
+                  Missing references are reported through the ServiceAccountRefsReady
+                  condition and are not created.
+                items:
+                  description: SARef is a reference to a specific ServiceAccount.
+                  properties:
+                    name:
+                      description: Name of the ServiceAccount.
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: Namespace of the ServiceAccount.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 256
+                type: array
               roleBindings:
                 description: List of ClusterRoles/Roles to which subjects will be
                   bound to. The list is a RoleRef which means we have to specify the
@@ -239,6 +263,9 @@ spec:
             - message: ServiceAccount subjects must specify a namespace
               rule: self.subjects.all(s, s.kind != 'ServiceAccount' || (has(s.namespace)
                 && size(s.namespace) > 0))
+            - message: externalServiceAccountRefs entries must specify a namespace
+              rule: '!has(self.externalServiceAccountRefs) || self.externalServiceAccountRefs.all(r,
+                has(r.namespace) && size(r.namespace) > 0)'
           status:
             description: BindDefinitionStatus defines the observed state of BindDefinition.
             properties:
@@ -363,6 +390,14 @@ spec:
                   This is used by kstatus to determine if the resource is current.
                 format: int64
                 type: integer
+              skippedServiceAccounts:
+                description: |-
+                  SkippedServiceAccounts lists explicitly external ServiceAccount refs that
+                  are not present. The controller does not create these ServiceAccounts.
+                  Format: "<namespace>/<name>: <reason>".
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

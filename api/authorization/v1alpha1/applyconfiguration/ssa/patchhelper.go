@@ -155,6 +155,9 @@ func bindDefinitionStatusEqual(a, b *authorizationv1alpha1.BindDefinitionStatus)
 	if !slices.Equal(a.ExternalServiceAccounts, b.ExternalServiceAccounts) {
 		return false
 	}
+	if !slices.Equal(a.SkippedServiceAccounts, b.SkippedServiceAccounts) {
+		return false
+	}
 	return conditionsEqual(a.Conditions, b.Conditions)
 }
 

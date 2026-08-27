@@ -116,6 +116,13 @@ func BindDefinitionStatusFrom(status *authorizationv1alpha1.BindDefinitionStatus
 		result.WithExternalServiceAccounts(sa)
 	}
 
+	// Set SkippedServiceAccounts — always initialise the slice so SSA can clear
+	// the condition data when all explicitly external SAs become available.
+	result.SkippedServiceAccounts = make([]string, 0, len(status.SkippedServiceAccounts))
+	for _, sa := range status.SkippedServiceAccounts {
+		result.WithSkippedServiceAccounts(sa)
+	}
+
 	// Set conditions
 	for i := range status.Conditions {
 		result.WithConditions(ConditionFrom(&status.Conditions[i]))

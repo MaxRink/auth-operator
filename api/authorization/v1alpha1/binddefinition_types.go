@@ -83,6 +83,7 @@ type NamespaceBinding struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.clusterRoleBindings) && has(self.clusterRoleBindings.clusterRoleRefs) && size(self.clusterRoleBindings.clusterRoleRefs) > 0) || (has(self.roleBindings) && self.roleBindings.exists(rb, (has(rb.clusterRoleRefs) && size(rb.clusterRoleRefs) > 0) || (has(rb.roleRefs) && size(rb.roleRefs) > 0)))",message="at least one binding with a referenced role must be specified"
 // +kubebuilder:validation:XValidation:rule="size(self.subjects) > 0",message="at least one subject must be specified"
 // +kubebuilder:validation:XValidation:rule="self.subjects.all(s, s.kind != 'ServiceAccount' || (has(s.namespace) && size(s.namespace) > 0))",message="ServiceAccount subjects must specify a namespace"
+// +kubebuilder:validation:XValidation:rule="!has(self.externalServiceAccountRefs) || self.externalServiceAccountRefs.all(r, has(r.namespace) && size(r.namespace) > 0)",message="externalServiceAccountRefs entries must specify a namespace"
 type BindDefinitionSpec struct {
 	// Name that will be prefixed to the concatenated string which is the name of the binding. Follows format "targetName-clusterrole-role-binding" where clusterrole/role is the in-cluster existing ClusterRole or Role.
 	// This field is immutable after creation; changing it would orphan existing bindings and service accounts.
@@ -99,6 +100,17 @@ type BindDefinitionSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxItems=256
 	Subjects []rbacv1.Subject `json:"subjects"`
+
+	// ExternalServiceAccountRefs lists ServiceAccounts that are referenced by
+	// this BindDefinition but must be provisioned and managed by another
+	// controller. Listed ServiceAccounts are never created, adopted, updated,
+	// or deleted by the auth operator. An existing historical owner reference
+	// belonging to this BindDefinition is removed safely during reconciliation.
+	// Missing references are reported through the ServiceAccountRefsReady
+	// condition and are not created.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=256
+	ExternalServiceAccountRefs []SARef `json:"externalServiceAccountRefs,omitempty"`
 
 	// List of ClusterRoles to which subjects will be bound to. The list is a RoleRef which means we have to specify the full rbacv1.RoleRef schema. The result of specifying this field are ClusterRoleBindings.
 	// +kubebuilder:validation:Optional
@@ -210,6 +222,12 @@ type BindDefinitionStatus struct {
 	// Format: "<namespace>/<name>".
 	// +kubebuilder:validation:Optional
 	ExternalServiceAccounts []string `json:"externalServiceAccounts,omitempty"`
+
+	// SkippedServiceAccounts lists explicitly external ServiceAccount refs that
+	// are not present. The controller does not create these ServiceAccounts.
+	// Format: "<namespace>/<name>: <reason>".
+	// +kubebuilder:validation:Optional
+	SkippedServiceAccounts []string `json:"skippedServiceAccounts,omitempty"`
 
 	// Conditions defines current service state of the Bind definition. All conditions should evaluate to true to signify successful reconciliation.
 	// +kubebuilder:validation:Optional

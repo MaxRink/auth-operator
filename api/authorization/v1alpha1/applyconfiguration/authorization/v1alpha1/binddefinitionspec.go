@@ -34,6 +34,14 @@ type BindDefinitionSpecApplyConfiguration struct {
 	TargetName *string `json:"targetName,omitempty"`
 	// List of subjects that will be bound to a target ClusterRole/Role. Can be "User", "Group" or "ServiceAccount".
 	Subjects []v1.Subject `json:"subjects,omitempty"`
+	// ExternalServiceAccountRefs lists ServiceAccounts that are referenced by
+	// this BindDefinition but must be provisioned and managed by another
+	// controller. Listed ServiceAccounts are never created, adopted, updated,
+	// or deleted by the auth operator. An existing historical owner reference
+	// belonging to this BindDefinition is removed safely during reconciliation.
+	// Missing references are reported through the ServiceAccountRefsReady
+	// condition and are not created.
+	ExternalServiceAccountRefs []SARefApplyConfiguration `json:"externalServiceAccountRefs,omitempty"`
 	// List of ClusterRoles to which subjects will be bound to. The list is a RoleRef which means we have to specify the full rbacv1.RoleRef schema. The result of specifying this field are ClusterRoleBindings.
 	ClusterRoleBindings *ClusterBindingApplyConfiguration `json:"clusterRoleBindings,omitempty"`
 	// List of ClusterRoles/Roles to which subjects will be bound to. The list is a RoleRef which means we have to specify the full rbacv1.RoleRef schema. The result of specifying the field are RoleBindings.
@@ -71,6 +79,19 @@ func (b *BindDefinitionSpecApplyConfiguration) WithTargetName(value string) *Bin
 func (b *BindDefinitionSpecApplyConfiguration) WithSubjects(values ...v1.Subject) *BindDefinitionSpecApplyConfiguration {
 	for i := range values {
 		b.Subjects = append(b.Subjects, values[i])
+	}
+	return b
+}
+
+// WithExternalServiceAccountRefs adds the given value to the ExternalServiceAccountRefs field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the ExternalServiceAccountRefs field.
+func (b *BindDefinitionSpecApplyConfiguration) WithExternalServiceAccountRefs(values ...*SARefApplyConfiguration) *BindDefinitionSpecApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithExternalServiceAccountRefs")
+		}
+		b.ExternalServiceAccountRefs = append(b.ExternalServiceAccountRefs, *values[i])
 	}
 	return b
 }

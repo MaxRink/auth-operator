@@ -179,6 +179,16 @@ adopted or modified, regardless of `disableAdoption`. Setting
 ServiceAccounts already owned by the same RestrictedBindDefinition continue to be
 reconciled.
 
+For ordinary `BindDefinition` resources, individual ServiceAccount creation can
+be delegated with `spec.externalServiceAccountRefs`. Each entry must name a
+ServiceAccount subject in the same BindDefinition. The auth operator then uses
+that subject in bindings but does not create, adopt, or reconcile it. If an
+existing SA still has this BindDefinition's historical owner/source metadata,
+that metadata is removed without changing provider-owned labels; the SA is
+reported in `status.externalServiceAccounts`. A missing delegated SA is never
+created and is reported in `status.skippedServiceAccounts`, with
+`ServiceAccountRefsReady=False` until the other controller provisions it.
+
 `spec.defaultAssignment` is exclusive per requester. If a user, group, or
 ServiceAccount matches multiple default policies, restricted resource admission
 fails closed until the policy assignments are made non-overlapping. Requesters

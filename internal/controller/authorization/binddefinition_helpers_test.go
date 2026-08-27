@@ -374,6 +374,89 @@ var _ = Describe("BindDefinition Helpers", func() {
 	})
 
 	Describe("ensureServiceAccounts", func() {
+		It("should leave an opted-out existing ServiceAccount external and detach only this BindDefinition metadata", func() {
+			bindDef := &authorizationv1alpha1.BindDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-binddef-sa-opted-out", Namespace: "default"},
+				Spec: authorizationv1alpha1.BindDefinitionSpec{
+					TargetName:          "test-sa-opted-out",
+					ClusterRoleBindings: authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+					Subjects:            []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "test-sa-opted-out", Namespace: "default"}},
+					ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{
+						Name: "test-sa-opted-out", Namespace: "default",
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, bindDef)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bindDef), bindDef)).To(Succeed())
+
+			controller := false
+			sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sa-opted-out",
+				Namespace: "default",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "Helm",
+					"helm.toolkit.fluxcd.io/name":  "auth-custom-resources",
+				},
+				Annotations: map[string]string{
+					helpers.SourceKindAnnotation:  authorizationv1alpha1.BindDefinitionKind,
+					helpers.SourceNamesAnnotation: bindDef.Name,
+				},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: authorizationv1alpha1.GroupVersion.String(),
+					Kind:       authorizationv1alpha1.BindDefinitionKind,
+					Name:       bindDef.Name,
+					UID:        bindDef.UID,
+					Controller: &controller,
+				}},
+			}}
+			Expect(k8sClient.Create(ctx, sa)).To(Succeed())
+
+			reconciler := &BindDefinitionReconciler{client: k8sClient, scheme: k8sClient.Scheme(), recorder: recorder}
+			generated, external, err := reconciler.ensureServiceAccounts(ctx, bindDef)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(generated).To(BeEmpty())
+			Expect(external).To(ConsistOf("default/test-sa-opted-out"))
+			Expect(bindDef.Status.SkippedServiceAccounts).To(BeEmpty())
+
+			updated := &corev1.ServiceAccount{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(sa), updated)).To(Succeed())
+			Expect(updated.Labels).To(Equal(sa.Labels))
+			Expect(updated.OwnerReferences).To(BeEmpty())
+			Expect(updated.Annotations).NotTo(HaveKey(helpers.SourceKindAnnotation))
+			Expect(updated.Annotations).NotTo(HaveKey(helpers.SourceNamesAnnotation))
+			Expect(updated.Annotations).NotTo(HaveKey(authorizationv1alpha1.AnnotationKeyReferencedBy))
+
+			Expect(k8sClient.Delete(ctx, sa)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, bindDef)).To(Succeed())
+		})
+
+		It("should report a missing opted-out ServiceAccount without creating it", func() {
+			bindDef := &authorizationv1alpha1.BindDefinition{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-binddef-sa-opted-out-missing", Namespace: "default"},
+				Spec: authorizationv1alpha1.BindDefinitionSpec{
+					TargetName:          "test-sa-opted-out-missing",
+					ClusterRoleBindings: authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+					Subjects:            []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "test-sa-opted-out-missing", Namespace: "default"}},
+					ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{
+						Name: "test-sa-opted-out-missing", Namespace: "default",
+					}},
+				},
+			}
+			Expect(k8sClient.Create(ctx, bindDef)).To(Succeed())
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bindDef), bindDef)).To(Succeed())
+
+			reconciler := &BindDefinitionReconciler{client: k8sClient, scheme: k8sClient.Scheme(), recorder: recorder}
+			generated, external, err := reconciler.ensureServiceAccounts(ctx, bindDef)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(generated).To(BeEmpty())
+			Expect(external).To(BeEmpty())
+			Expect(bindDef.Status.SkippedServiceAccounts).To(ConsistOf("default/test-sa-opted-out-missing: not found (creation opted out)"))
+
+			sa := &corev1.ServiceAccount{}
+			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-sa-opted-out-missing", Namespace: "default"}, sa)).NotTo(Succeed())
+			Expect(k8sClient.Delete(ctx, bindDef)).To(Succeed())
+		})
+
 		It("should create ServiceAccount with automountServiceAccountToken=true when field is nil (backward compatibility)", func() {
 			bindDef := &authorizationv1alpha1.BindDefinition{
 				ObjectMeta: metav1.ObjectMeta{
@@ -629,6 +712,29 @@ var _ = Describe("BindDefinition Helpers", func() {
 			// Cleanup
 			Expect(k8sClient.Delete(ctx, updatedSa)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, bindDef)).To(Succeed())
+		})
+	})
+
+	Describe("bindDefinitionServiceAccountsForDeletion", func() {
+		It("should never include explicitly external ServiceAccounts", func() {
+			bindDef := &authorizationv1alpha1.BindDefinition{
+				Spec: authorizationv1alpha1.BindDefinitionSpec{
+					Subjects: []rbacv1.Subject{
+						{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+						{Kind: rbacv1.ServiceAccountKind, Name: "managed-sa", Namespace: "managed-ns"},
+					},
+					ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "external-sa", Namespace: "external-ns"}},
+				},
+				Status: authorizationv1alpha1.BindDefinitionStatus{
+					GeneratedServiceAccounts: []rbacv1.Subject{
+						{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+						{Kind: rbacv1.ServiceAccountKind, Name: "managed-sa", Namespace: "managed-ns"},
+					},
+				},
+			}
+			Expect(bindDefinitionServiceAccountsForDeletion(bindDef)).To(ConsistOf(
+				rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "managed-sa", Namespace: "managed-ns"},
+			))
 		})
 	})
 })
