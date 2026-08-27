@@ -1417,7 +1417,7 @@ func (r *BindDefinitionReconciler) ensureServiceAccounts(
 
 		saExists := err == nil
 		saKey := subject.Namespace + "/" + subject.Name
-		if explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
+		if _, explicitlyExternal := externalRefs[saKey]; explicitlyExternal {
 			handled, err := r.handleExplicitlyExternalServiceAccount(ctx, bindDef, subject, existing, saExists)
 			if err != nil {
 				return nil, nil, err
