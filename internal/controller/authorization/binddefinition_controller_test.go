@@ -5414,6 +5414,56 @@ func TestReconcile_MissingTargetNamespaceAlsoReportsSkippedExternalServiceAccoun
 	g.Expect(ready.Message).To(ContainSubstring("missing-ns"))
 }
 
+func TestReconcile_SkippedExternalServiceAccountHonorsMissingRoleBackoff(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	s := runtime.NewScheme()
+	_ = authorizationv1alpha1.AddToScheme(s)
+	_ = rbacv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: authorizationv1alpha1.GroupVersion.String(),
+			Kind:       "BindDefinition",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "missing-role-external-sa-bd",
+			UID:        "missing-role-external-sa-bd-uid",
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer},
+		},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName: "missing-role-external-sa-target",
+			Subjects: []rbacv1.Subject{
+				{Kind: rbacv1.ServiceAccountKind, Name: "external-sa", Namespace: "external-ns"},
+			},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: "external-sa", Namespace: "external-ns"}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"missing-role"}},
+			RoleBindings:               nil,
+		},
+		Status: authorizationv1alpha1.BindDefinitionStatus{
+			Conditions: []metav1.Condition{{
+				Type:               string(authorizationv1alpha1.RoleRefValidCondition),
+				Status:             metav1.ConditionFalse,
+				Reason:             string(authorizationv1alpha1.RoleRefInvalidReason),
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(bd, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "external-ns"}}).
+		WithStatusSubresource(bd).
+		Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(10)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(roleRefRequeueMax),
+		"a skipped external ServiceAccount must not bypass missing-role exponential backoff")
+}
+
 func TestReconcile_MissingExplicitNamespacePreservesMissingRoleRefs(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.Background()

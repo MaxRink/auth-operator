@@ -545,6 +545,15 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
+		requeueAfter := DefaultRequeueInterval
+		if missingRoleRefCount > 0 {
+			// Keep the normal opt-out retry cadence as a floor, while honoring
+			// exponential backoff once missing role references persist.
+			requeueAfter = calculateMissingRoleRefBackoff(bindDefinition)
+			if requeueAfter < DefaultRequeueInterval {
+				requeueAfter = DefaultRequeueInterval
+			}
+		}
 		conditions.MarkNotReady(bindDefinition, bindDefinition.Generation,
 			authorizationv1alpha1.ServiceAccountRefsSkippedReason,
 			authorizationv1alpha1.ServiceAccountRefsSkippedMessage,
@@ -557,7 +566,7 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, fmt.Errorf("apply BindDefinition status for skipped ServiceAccounts: %w", err)
 		}
 		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
-		return ctrl.Result{RequeueAfter: DefaultRequeueInterval}, nil
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// Mark Ready and apply final status via SSA (kstatus)
