@@ -338,6 +338,25 @@ func TestValidateNamespaceBindingsUsesConfiguredLabelGroups(t *testing.T) {
 	}
 }
 
+func TestValidateNamespaceBindingsReportsMatchExpressionIndex(t *testing.T) {
+	kind := schema.GroupKind{Group: GroupVersion.Group, Kind: BindDefinitionKind}
+	err := validateNamespaceBindings(kind, "expression-path", []NamespaceBinding{{
+		ClusterRoleRefs: []string{"view"},
+		NamespaceSelector: []metav1.LabelSelector{{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      "example.com/not-allowed",
+				Operator: metav1.LabelSelectorOpExists,
+			}},
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected selector validation error, got nil")
+	}
+	if got := err.Error(); !strings.Contains(got, "spec.roleBindings[0].namespaceSelector[0].matchExpressions[0].key") {
+		t.Fatalf("expected indexed match expression path, got %q", got)
+	}
+}
+
 func TestValidateNamespaceAdmissionSelectorLabelGroups(t *testing.T) {
 	testCases := []struct {
 		name   string

@@ -554,13 +554,13 @@ func validateNamespaceBindingsWithLabelGroups(kind schema.GroupKind, name string
 							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or configured label groups matching "+formatNamespaceAdmissionSelectorLabelGroups(allowedLabelGroups))})
 				}
 			}
-			for _, expr := range selector.MatchExpressions {
+			for exprIndex, expr := range selector.MatchExpressions {
 				if !isAllowedNamespaceAdmissionSelectorKey(expr.Key, allowedLabelGroups) {
 					return apierrors.NewInvalid(
 						kind,
 						name,
 						field.ErrorList{field.Invalid(
-							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchExpressions").Key(expr.Key),
+							field.NewPath("spec", "roleBindings").Index(i).Child("namespaceSelector").Index(j).Child("matchExpressions").Index(exprIndex).Child("key"),
 							expr.Key,
 							"namespace admission selectors may only use tracked ownership labels ("+LabelKeyOwner+", "+LabelKeyTenant+", "+LabelKeyThirdParty+"), "+corev1.LabelMetadataName+", or configured label groups matching "+formatNamespaceAdmissionSelectorLabelGroups(allowedLabelGroups))})
 				}
