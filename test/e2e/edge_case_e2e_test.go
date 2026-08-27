@@ -419,7 +419,22 @@ metadata:
 				output, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(string(output)).NotTo(ContainSubstring(ownershipBD))
+				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
+					"-o", "jsonpath={.metadata.managedFields[*].manager}")
+				output, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(output)).To(ContainSubstring(map[string]string{
+					ownershipHelmSA: "helm-controller", ownershipUnknownSA: "unknown-controller",
+				}[name]))
 			}
+
+			By("Verifying the generated binding still contains both ServiceAccount subjects")
+			cmd = utils.CommandContext(context.Background(), "kubectl", "get", "clusterrolebinding",
+				"e2e-ownership-transfer-view-binding", "-o", "jsonpath={.subjects[*].name}")
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(output)).To(ContainSubstring(ownershipHelmSA))
+			Expect(string(output)).To(ContainSubstring(ownershipUnknownSA))
 
 			By("Letting the external manager update its label after the transfer")
 			applyServerSideFieldManager(fmt.Sprintf(`
@@ -482,6 +497,12 @@ metadata:
 				Consistently(func() error {
 					return checkResourceExists("serviceaccount", name, edgeCaseNS)
 				}, 15*time.Second, pollInterval).Should(Succeed(), "transferred ServiceAccount %s must survive BindDefinition deletion", name)
+				cmd = utils.CommandContext(context.Background(), "kubectl", "get", "sa", name, "-n", edgeCaseNS,
+					"-o", "jsonpath={.metadata.annotations}")
+				output, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(output)).NotTo(ContainSubstring("referenced-by"))
+				Expect(string(output)).NotTo(ContainSubstring("external-field-managers"))
 			}
 		})
 	})

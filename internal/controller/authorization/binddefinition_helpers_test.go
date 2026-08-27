@@ -87,6 +87,21 @@ func TestServiceAccountSSAConflictDetails(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects mixed label and non-label conflicts", func(t *testing.T) {
+		t.Parallel()
+		err := &apierrors.StatusError{ErrStatus: metav1.Status{
+			Reason: metav1.StatusReasonConflict,
+			Details: &metav1.StatusDetails{Causes: []metav1.StatusCause{
+				{Type: metav1.CauseType("FieldManagerConflict"), Field: ".metadata.labels.app.kubernetes.io/managed-by", Message: `conflict with "helm-controller"`},
+				{Type: metav1.CauseType("FieldManagerConflict"), Field: ".automountServiceAccountToken", Message: `conflict with "workload-controller"`},
+			}},
+		}}
+
+		if managers, labelOnly := serviceAccountSSAConflictDetails(err); labelOnly || managers != nil {
+			t.Fatalf("mixed conflicts must remain fatal, got managers=%v labelOnly=%v", managers, labelOnly)
+		}
+	})
+
 	t.Run("sorts multiple managers", func(t *testing.T) {
 		t.Parallel()
 		err := &apierrors.StatusError{ErrStatus: metav1.Status{
