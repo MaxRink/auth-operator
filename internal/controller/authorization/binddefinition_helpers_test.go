@@ -424,7 +424,7 @@ var _ = Describe("BindDefinition Helpers", func() {
 			Expect(updated.OwnerReferences).To(BeEmpty())
 			Expect(updated.Annotations).NotTo(HaveKey(helpers.SourceKindAnnotation))
 			Expect(updated.Annotations).NotTo(HaveKey(helpers.SourceNamesAnnotation))
-			Expect(updated.Annotations[authorizationv1alpha1.AnnotationKeyReferencedBy]).To(Equal(bindDef.Name))
+			Expect(updated.Annotations).NotTo(HaveKey(authorizationv1alpha1.AnnotationKeyReferencedBy))
 
 			Expect(k8sClient.Delete(ctx, sa)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, bindDef)).To(Succeed())

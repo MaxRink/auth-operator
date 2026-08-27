@@ -788,7 +788,7 @@ func (r *BindDefinitionReconciler) reconcileResources(
 	if err := r.pruneStaleServiceAccounts(
 		ctx,
 		bindDefinition,
-		bindDefinitionDesiredServiceAccounts(generatedSAs),
+		bindDefinitionDesiredServiceAccountsWithExternalRefs(generatedSAs, bindDefinition.Spec.ExternalServiceAccountRefs),
 		previousGeneratedSAs,
 	); err != nil {
 		return 0, fmt.Errorf("prune stale ServiceAccounts: %w", err)
@@ -1236,6 +1236,20 @@ func bindDefinitionDesiredServiceAccounts(subjects []rbacv1.Subject) map[string]
 	return desired
 }
 
+func bindDefinitionDesiredServiceAccountsWithExternalRefs(
+	subjects []rbacv1.Subject,
+	externalRefs []authorizationv1alpha1.SARef,
+) map[string]struct{} {
+	desired := bindDefinitionDesiredServiceAccounts(subjects)
+	for _, ref := range externalRefs {
+		if ref.Namespace == "" || ref.Name == "" {
+			continue
+		}
+		desired[ref.Namespace+"/"+ref.Name] = struct{}{}
+	}
+	return desired
+}
+
 func (r *BindDefinitionReconciler) pruneStaleServiceAccounts(
 	ctx context.Context,
 	bindDef *authorizationv1alpha1.BindDefinition,
@@ -1536,12 +1550,6 @@ func (r *BindDefinitionReconciler) handleExplicitlyExternalServiceAccount(
 	if err := r.detachServiceAccountFromBindDefinition(ctx, existing, bindDef); err != nil {
 		return false, fmt.Errorf("detach opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
 	}
-	if err := r.client.Get(ctx, types.NamespacedName{Name: subject.Name, Namespace: subject.Namespace}, existing); err != nil {
-		return false, fmt.Errorf("refresh opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
-	}
-	if err := r.addExternalSAReference(ctx, existing, bindDef.Name); err != nil {
-		return false, fmt.Errorf("track opted-out ServiceAccount %s/%s: %w", subject.Namespace, subject.Name, err)
-	}
 	r.recorder.Eventf(bindDef, nil, corev1.EventTypeNormal,
 		authorizationv1alpha1.EventReasonExternalSATracked, authorizationv1alpha1.EventActionReconcile,
 		"Using explicitly external ServiceAccount %s/%s; creation and ownership are delegated to another controller",
@@ -1587,6 +1595,14 @@ func (r *BindDefinitionReconciler) reconcileDelete(
 	// Clean up tracking annotations from external ServiceAccounts
 	if err := r.cleanupExternalSAReferences(ctx, bindDefinition); err != nil {
 		return ctrl.Result{}, fmt.Errorf("cleanup external ServiceAccount references for BindDefinition %s: %w", bindDefinition.Name, err)
+	}
+
+	// An opt-out may have been added after this BindDefinition last reconciled.
+	// Detach historical owner/source metadata before excluding explicit refs from
+	// deletion cleanup, otherwise garbage collection could delete an externally
+	// managed ServiceAccount when the finalizer is removed.
+	if err := r.detachExplicitExternalServiceAccounts(ctx, bindDefinition); err != nil {
+		return ctrl.Result{}, fmt.Errorf("detach explicitly external ServiceAccounts for BindDefinition %s: %w", bindDefinition.Name, err)
 	}
 
 	// Delete ServiceAccounts
@@ -1661,6 +1677,41 @@ func (r *BindDefinitionReconciler) deleteSubjectServiceAccounts(
 		}
 	}
 	return nil
+}
+
+func (r *BindDefinitionReconciler) detachExplicitExternalServiceAccounts(
+	ctx context.Context,
+	bindDef *authorizationv1alpha1.BindDefinition,
+) error {
+	var detachErrors []error
+	seen := make(map[string]struct{}, len(bindDef.Spec.ExternalServiceAccountRefs))
+	reader := r.reader
+	if reader == nil {
+		reader = r.client
+	}
+	for _, ref := range bindDef.Spec.ExternalServiceAccountRefs {
+		if ref.Namespace == "" || ref.Name == "" {
+			continue
+		}
+		key := ref.Namespace + "/" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		sa := &corev1.ServiceAccount{}
+		if err := reader.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, sa); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			detachErrors = append(detachErrors, fmt.Errorf("get ServiceAccount %s: %w", key, err))
+			continue
+		}
+		if err := r.detachServiceAccountFromBindDefinition(ctx, sa, bindDef); err != nil {
+			detachErrors = append(detachErrors, fmt.Errorf("detach ServiceAccount %s: %w", key, err))
+		}
+	}
+	return errors.Join(detachErrors...)
 }
 
 func bindDefinitionServiceAccountsForDeletion(bindDef *authorizationv1alpha1.BindDefinition) []rbacv1.Subject {
