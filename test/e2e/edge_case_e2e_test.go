@@ -505,7 +505,7 @@ metadata:
 			// those warning notes.  Query by reason and assert the stable event
 			// contract for one retained transfer.  Either transfer may be retained.
 			Eventually(func() bool {
-				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
+				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events.events.k8s.io", "-A",
 					"--field-selector=reason=ServiceAccountOwnershipTransferred,regarding.name="+ownershipBD,
 					"-o", "jsonpath={range .items[*]}{.type}{\"|\"}{.reason}{\"|\"}{.note}{\"\\n\"}{end}")
 				output, err := utils.Run(cmd)
