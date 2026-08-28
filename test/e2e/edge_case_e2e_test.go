@@ -499,21 +499,26 @@ metadata:
 				return nil
 			}, reconcileTimeout, pollInterval).Should(Succeed())
 
-			// Kubernetes aggregates Events with the same involved object, reason,
+			// Kubernetes aggregates Events with the same regarding object, reason,
 			// and action.  The condition above is the durable record of every
 			// transferred ServiceAccount; the Event API may retain only one of
 			// those warning notes.  Query by reason and assert the stable event
-			// contract for one retained transfer.
+			// contract for one retained transfer.  Either transfer may be retained.
 			Eventually(func() bool {
 				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
-					"--field-selector=reason=ServiceAccountOwnershipTransferred",
-					"-o", "jsonpath={.items[*].note}")
+					"--field-selector=reason=ServiceAccountOwnershipTransferred,regarding.name="+ownershipBD,
+					"-o", "jsonpath={range .items[*]}{.type}{\"|\"}{.reason}{\"|\"}{.note}{\"\\n\"}{end}")
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return false
 				}
 				events := string(output)
-				return strings.Contains(events, ownershipHelmSA) && strings.Contains(events, "helm-controller")
+				if !strings.Contains(events, "Warning|ServiceAccountOwnershipTransferred|") {
+					return false
+				}
+				helmEvent := strings.Contains(events, ownershipHelmSA) && strings.Contains(events, "helm-controller")
+				unknownEvent := strings.Contains(events, ownershipUnknownSA) && strings.Contains(events, "unknown-controller")
+				return helmEvent || unknownEvent
 			}, reconcileTimeout, pollInterval).Should(BeTrue(), "takeover warning event should report the transferred ServiceAccount and field manager")
 
 			By("Deleting the BindDefinition and proving transferred SAs are not deleted")
