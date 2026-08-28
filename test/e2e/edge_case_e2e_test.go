@@ -501,14 +501,15 @@ metadata:
 
 			Eventually(func() bool {
 				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
-					"--field-selector=reason=ServiceAccountOwnershipTransferred", "-o", "jsonpath={.items[*].note}")
+					"--field-selector=reason=ServiceAccountOwnershipTransferred,involvedObject.name="+ownershipBD,
+					"-o", "jsonpath={.items[*].note}")
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return false
 				}
 				events := string(output)
-				return strings.Contains(events, "helm-controller") && strings.Contains(events, "unknown-controller")
-			}, reconcileTimeout, pollInterval).Should(BeTrue(), "takeover warning events should report both field managers")
+				return strings.Contains(events, ownershipHelmSA) && strings.Contains(events, "helm-controller")
+			}, reconcileTimeout, pollInterval).Should(BeTrue(), "takeover warning event should report the transferred ServiceAccount and field manager")
 
 			By("Deleting the BindDefinition and proving transferred SAs are not deleted")
 			cmd = utils.CommandContext(context.Background(), "kubectl", "delete", "binddefinition", ownershipBD)
