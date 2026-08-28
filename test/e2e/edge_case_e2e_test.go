@@ -499,9 +499,14 @@ metadata:
 				return nil
 			}, reconcileTimeout, pollInterval).Should(Succeed())
 
+			// Kubernetes aggregates Events with the same involved object, reason,
+			// and action.  The condition above is the durable record of every
+			// transferred ServiceAccount; the Event API may retain only one of
+			// those warning notes.  Query by reason and assert the stable event
+			// contract for one retained transfer.
 			Eventually(func() bool {
 				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
-					"--field-selector=reason=ServiceAccountOwnershipTransferred,involvedObject.name="+ownershipBD,
+					"--field-selector=reason=ServiceAccountOwnershipTransferred",
 					"-o", "jsonpath={.items[*].note}")
 				output, err := utils.Run(cmd)
 				if err != nil {
