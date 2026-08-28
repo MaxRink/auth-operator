@@ -501,7 +501,7 @@ metadata:
 
 			Eventually(func() bool {
 				cmd := utils.CommandContext(context.Background(), "kubectl", "get", "events", "-A",
-					"--field-selector=reason=ServiceAccountOwnershipTransferred", "-o", "jsonpath={.items[*].message}")
+					"--field-selector=reason=ServiceAccountOwnershipTransferred", "-o", "jsonpath={.items[*].note}")
 				output, err := utils.Run(cmd)
 				if err != nil {
 					return false
