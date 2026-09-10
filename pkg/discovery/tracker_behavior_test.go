@@ -156,6 +156,7 @@ func TestResourceTrackerSignalRegistrationConcurrent(t *testing.T) {
 
 type discoveryTestServer struct {
 	*httptest.Server
+	t        *testing.T
 	empty    atomic.Bool
 	err      atomic.Bool
 	mu       sync.Mutex
@@ -164,7 +165,7 @@ type discoveryTestServer struct {
 
 func newDiscoveryTestServer(t *testing.T) *discoveryTestServer {
 	t.Helper()
-	server := &discoveryTestServer{requests: make(map[string]int)}
+	server := &discoveryTestServer{t: t, requests: make(map[string]int)}
 	server.Server = httptest.NewServer(http.HandlerFunc(server.handle))
 	return server
 }
@@ -202,9 +203,9 @@ func (s *discoveryTestServer) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch r.URL.Path {
 	case "/api":
-		_ = json.NewEncoder(w).Encode(metav1.APIVersions{TypeMeta: metav1.TypeMeta{Kind: "APIVersions"}, Versions: []string{"v1"}})
+		s.encode(w, metav1.APIVersions{TypeMeta: metav1.TypeMeta{Kind: "APIVersions"}, Versions: []string{"v1"}})
 	case "/apis":
-		_ = json.NewEncoder(w).Encode(metav1.APIGroupList{TypeMeta: metav1.TypeMeta{Kind: "APIGroupList"}})
+		s.encode(w, metav1.APIGroupList{TypeMeta: metav1.TypeMeta{Kind: "APIGroupList"}})
 	case "/api/v1":
 		if s.err.Load() {
 			http.Error(w, "discovery failure", http.StatusInternalServerError)
@@ -214,12 +215,19 @@ func (s *discoveryTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		if !s.empty.Load() {
 			resources = append(resources, metav1.APIResource{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: []string{"get", "list"}})
 		}
-		_ = json.NewEncoder(w).Encode(metav1.APIResourceList{
+		s.encode(w, metav1.APIResourceList{
 			TypeMeta:     metav1.TypeMeta{Kind: "APIResourceList"},
 			GroupVersion: "v1",
 			APIResources: resources,
 		})
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func (s *discoveryTestServer) encode(w http.ResponseWriter, value any) {
+	s.t.Helper()
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		s.t.Errorf("encode discovery response: %v", err)
 	}
 }

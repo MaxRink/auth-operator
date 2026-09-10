@@ -405,19 +405,7 @@ func (r *ResourceTracker) collectAPIResourcesWithLock(ctx context.Context, waitF
 	apiResourcesByGroupVersion := make(APIResourcesByGroupVersion)
 	mutex := sync.Mutex{}
 
-	coreV1Discovered := false
-	for _, apiGroup := range discoveredAPIGroups.Groups {
-		for _, apiGroupVersion := range apiGroup.Versions {
-			if apiGroup.Name == "" && apiGroupVersion.Version == "v1" {
-				coreV1Discovered = true
-				break
-			}
-		}
-		if coreV1Discovered {
-			break
-		}
-	}
-	if !coreV1Discovered {
+	if !discoveryHasCoreV1(discoveredAPIGroups.Groups) {
 		// ServerGroups normally includes the legacy core group. Keep this
 		// fallback for discovery implementations that omit it.
 		errorGroup.Go(func() error {
@@ -501,6 +489,17 @@ func (r *ResourceTracker) collectAPIResourcesWithLock(ctx context.Context, waitF
 
 	logger.V(2).Info("API resources cache updated")
 	return true, nil
+}
+
+func discoveryHasCoreV1(groups []metav1.APIGroup) bool {
+	for _, group := range groups {
+		for _, version := range group.Versions {
+			if group.Name == "" && version.Version == "v1" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func countAPIResources(resources APIResourcesByGroupVersion) int {
