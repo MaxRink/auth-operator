@@ -31,10 +31,13 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 	-X github.com/telekom/auth-operator/pkg/system.Repository=$REPOSITORY" \
 	-o /out/auth-operator ./main.go
 
-# Runtime stage (distroless)
-# Digest pinned for supply-chain integrity; update with:
-#   docker buildx imagetools inspect gcr.io/distroless/static-debian12
-FROM gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
+# Secure metrics generates certificates below this path at runtime. Keep the
+# directory writable for the non-root runtime user in the scratch image.
+RUN mkdir -p /out/tmp/k8s-metrics-server && chown 65532:65532 /out/tmp/k8s-metrics-server && chmod 0700 /out/tmp/k8s-metrics-server
+
+# Runtime stage: the binary is fully static, so use scratch to avoid shipping
+# an independently-updated Debian package set in the runtime image.
+FROM scratch
 
 # OCI image labels (may be overridden by docker/metadata-action in CI)
 LABEL org.opencontainers.image.title="auth-operator" \
@@ -43,12 +46,14 @@ LABEL org.opencontainers.image.title="auth-operator" \
       org.opencontainers.image.source="https://github.com/telekom/auth-operator" \
       org.opencontainers.image.vendor="Deutsche Telekom AG" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.base.name="gcr.io/distroless/static-debian12"
+      org.opencontainers.image.base.name="scratch"
 
 WORKDIR /
 
 COPY --from=build /out/auth-operator ./auth-operator
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /src/LICENSE /licenses/LICENSE
 COPY --from=build /src/LICENSES/ /licenses/LICENSES/
+COPY --from=build --chown=65532:65532 /out/tmp/ /tmp/
 USER 65532:65532
 ENTRYPOINT ["/auth-operator"]

@@ -345,7 +345,7 @@ jobs:
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/main/docs/operator-guide.md
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.base.name=gcr.io/distroless/static-debian12
+            org.opencontainers.image.base.name=scratch
             io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository }}/main/README.md
             io.artifacthub.package.maintainers=[{"name":"T-CaaS Team","email":"t-caas@telekom.de"}]
             slsa.dev/buildType=https://github.com/slsa-framework/slsa-github-generator/container@v1
@@ -429,11 +429,13 @@ jobs:
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: 'v0.74.0'
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.inspect.outputs.digest }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          cache: 'false'
 
       - name: Upload Trivy scan results to GitHub Security
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
