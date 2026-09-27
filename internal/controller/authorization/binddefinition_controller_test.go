@@ -6249,7 +6249,8 @@ func TestReconcile_ServiceAccountOwnershipReadiness(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(bd).
 				WithObjects(bd, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}},
 					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target-ns"}}).Build()
-			r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(100)}
+			recorder := events.NewFakeRecorder(100)
+			r := &BindDefinitionReconciler{client: c, scheme: s, recorder: recorder}
 			saKey := client.ObjectKey{Name: subject.Name, Namespace: subject.Namespace}
 			reconcileReady := func(present bool) {
 				result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: bd.Name}})
@@ -6266,6 +6267,11 @@ func TestReconcile_ServiceAccountOwnershipReadiness(t *testing.T) {
 					g.Expect(refsReady.Status).To(Equal(metav1.ConditionFalse))
 					g.Expect(updated.Status.SkippedServiceAccounts).To(HaveLen(1))
 					g.Expect(apierrors.IsNotFound(c.Get(ctx, saKey, &corev1.ServiceAccount{}))).To(BeTrue())
+					var emitted []string
+					for len(recorder.Events) > 0 {
+						emitted = append(emitted, <-recorder.Events)
+					}
+					g.Expect(emitted).To(ContainElement(ContainSubstring("Warning ServiceAccountSkipped")))
 				} else {
 					g.Expect(refsReady.Status).To(Equal(metav1.ConditionTrue))
 					g.Expect(updated.Status.SkippedServiceAccounts).To(BeEmpty())

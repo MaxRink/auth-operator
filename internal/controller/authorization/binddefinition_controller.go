@@ -548,6 +548,11 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// External ServiceAccounts belong to another controller. Their absence is
 	// reported by ServiceAccountRefsReady, but does not block applied bindings.
+	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
+		r.recorder.Eventf(bindDefinition, nil, corev1.EventTypeWarning,
+			authorizationv1alpha1.EventReasonServiceAccountSkipped, authorizationv1alpha1.EventActionValidate,
+			"ServiceAccount subjects were skipped and not created: %v", bindDefinition.Status.SkippedServiceAccounts)
+	}
 
 	// Mark Ready and apply final status via SSA (kstatus)
 	logger.V(2).Info("Marking BindDefinition as Ready and applying status",
