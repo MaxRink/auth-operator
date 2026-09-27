@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Let BindDefinitions become ready after applying bindings for explicitly external
+  ServiceAccounts, even before their provider creates them. Missing external
+  subjects remain visible in status without deadlocking providers that depend on
+  their RBAC being ready.
+
 ### Added
 
 - Opt-in creator tracking through Kubernetes `MutatingAdmissionPolicy`, with

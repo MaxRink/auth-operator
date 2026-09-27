@@ -188,7 +188,15 @@ existing SA still has this BindDefinition's historical owner/source metadata,
 that metadata is removed without changing provider-owned labels; the SA is
 reported in `status.externalServiceAccounts`. A missing delegated SA is never
 created and is reported in `status.skippedServiceAccounts`, with
-`ServiceAccountRefsReady=False` until the other controller provisions it.
+`ServiceAccountRefsReady=False` until the other controller provisions it. This
+is diagnostic: once the declared bindings have been applied, the BindDefinition
+can be `Ready=True` even while an explicitly external ServiceAccount (or its
+namespace) is absent. Kubernetes bindings refer to subjects by name and namespace;
+they can be installed before the subject exists. This permits the provider to
+depend on its RBAC being ready before creating the ServiceAccount. Missing target
+namespaces, strict missing-role validation, and reconciliation errors still block
+readiness. Managed ServiceAccounts retain their normal creation and ownership
+behavior.
 
 `spec.defaultAssignment` is exclusive per requester. If a user, group, or
 ServiceAccount matches multiple default policies, restricted resource admission
