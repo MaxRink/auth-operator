@@ -202,6 +202,25 @@ no bindings are created until the missing roles are resolved. When the policy
 is set to `ignore`, validation is skipped entirely and the condition is set
 to `Unknown`.
 
+### ServiceAccountRefsReady
+
+Reports whether every ServiceAccount listed in `spec.externalServiceAccountRefs`
+exists in an active namespace. The operator never creates these ServiceAccounts.
+
+| Status | Reason | Message |
+|--------|--------|---------|
+| `True` | `ServiceAccountRefsReady` | All ServiceAccount subjects are present |
+| `False` | `ServiceAccountRefsSkipped` | Skipped ServiceAccount subjects: *\<details\>* |
+
+Missing references are listed in `status.skippedServiceAccounts` as
+`<namespace>/<name>: <reason>` and a `ServiceAccountSkipped` warning event is
+emitted. This condition is diagnostic for BindDefinition: bindings are still
+applied, and the BindDefinition can become `Ready=True` while an external
+ServiceAccount (or its namespace) is absent, so a provider can wait for its
+RBAC before creating the account. External ServiceAccounts are not watched;
+the condition turns `True` on the next periodic reconciliation (every 60
+seconds, or the missing-role backoff interval) after the account appears.
+
 ### ServiceAccountOwnershipTransferred
 
 An abnormal-true condition recording that a generated ServiceAccount was
@@ -218,7 +237,7 @@ the BindDefinition can still become `Ready=True`.
 
 ```
 Finalizer → RoleRefsValid → OwnerRef (if SAs) →
-Created/Updated → Ready
+ServiceAccountRefsReady → Created/Updated → Ready
 ```
 
 ---
