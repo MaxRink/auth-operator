@@ -303,6 +303,22 @@ var _ = Describe("Creator Tracking Kyverno", Label("creator-tracking-kyverno"), 
 	waitAnnotation := func(ctx context.Context, resource, name, key, expected string, namespace ...string) {
 		Eventually(func() string { return annotations(ctx, resource, name, namespace...)[key] }, 2*time.Minute, 2*time.Second).Should(Equal(expected))
 	}
+	// Policy readiness can precede API-server admission activation. Repeat a
+	// server-side dry run until it carries the expected mutation before relying
+	// on a one-shot request that exercises the same admission path.
+	waitDryRunAnnotation := func(ctx context.Context, key, expected string, args ...string) {
+		EventuallyWithOffset(1, func() (string, error) {
+			output, err := runResult(ctx, args...)
+			if err != nil {
+				return "", fmt.Errorf("server-side dry-run probe: %w (%s)", err, output)
+			}
+			var object map[string]interface{}
+			if err := json.Unmarshal(output, &object); err != nil {
+				return "", fmt.Errorf("decode server-side dry-run probe: %w", err)
+			}
+			return value(object, "metadata", "annotations", key), nil
+		}, time.Minute, time.Second).Should(Equal(expected))
+	}
 
 	BeforeAll(func(ctx SpecContext) {
 		setSuiteOutputDir("creator-tracking-kyverno")
@@ -350,10 +366,11 @@ subjects:
 		deleteAndWait(ctx, "mutatingpolicy", "creator-tracking", "contributor-tracking")
 		deleteAndWait(ctx, "mutatingadmissionpolicy", "mpol-creator-tracking", "mpol-contributor-tracking")
 		deleteAndWait(ctx, "mutatingadmissionpolicybinding", "mpol-creator-tracking-binding", "mpol-contributor-tracking-binding")
-		deleteAndWait(ctx, "clusterpolicy", "creator-tracking", "creator-tracking-benign-label")
-		deleteAndWait(ctx, "binddefinition", "creator-tracking-kyverno-binding")
+		deleteAndWait(ctx, "clusterpolicy", "creator-tracking", "creator-tracking-benign-label", "creator-tracking-binding-updates")
+		deleteAndWait(ctx, "binddefinition", "creator-tracking-kyverno-binding", "creator-tracking-kyverno-noop")
 		deleteAndWait(ctx, "roledefinition", "creator-tracking-kyverno-role", kyvernoLegacyRole)
 		deleteAndWait(ctx, "clusterrolebinding", "creator-tracking-kyverno-binding-creator-tracking-kyverno-reader-binding")
+		deleteAndWait(ctx, "clusterrolebinding", "creator-tracking-kyverno-noop-view-binding")
 		deleteAndWait(ctx, "namespace", kyvernoNamespace, kyvernoPrePolicy, kyvernoLegacy,
 			"creator-tracking-kyverno-legacy-new", "creator-tracking-kyverno-mutating",
 			"creator-tracking-kyverno-benign", "creator-tracking-kyverno-byte-exact",
@@ -383,6 +400,8 @@ subjects:
 			}, 2*time.Minute, 2*time.Second).Should(Succeed())
 		}
 		identity := whoami(ctx, reservedUser, creatorGroup)
+		waitDryRunAnnotation(ctx, creatorAnnotation, reservedUser,
+			append(impersonated(reservedUser, creatorGroup), "create", "namespace", "creator-tracking-kyverno-activation", "--dry-run=server", "-o", "json")...)
 		createNamespace(ctx, reservedUser, kyvernoNamespace, creatorGroup)
 		waitAnnotation(ctx, "namespace", kyvernoNamespace, creatorAnnotation, reservedUser)
 		a := annotations(ctx, "namespace", kyvernoNamespace)
@@ -448,23 +467,18 @@ subjects:
 		// Source readiness can precede API-server policy activation. A server-side
 		// dry run proves the generated binding is active before the one-shot
 		// pre-existing-object update below.
-		Eventually(func() (string, error) {
-			args := append(impersonated(reservedUser, creatorGroup), "create", "namespace", "creator-tracking-kyverno-activation", "--dry-run=server", "-o", "json")
-			output, err := runResult(ctx, args...)
-			if err != nil {
-				return "", fmt.Errorf("probe generated Kyverno MAP: %w", err)
-			}
-			var object map[string]interface{}
-			if err := json.Unmarshal(output, &object); err != nil {
-				return "", fmt.Errorf("decode generated Kyverno MAP probe: %w", err)
-			}
-			return value(object, "metadata", "annotations", creatorAnnotation), nil
-		}, time.Minute, time.Second).Should(Equal(reservedUser))
+		waitDryRunAnnotation(ctx, creatorAnnotation, reservedUser,
+			append(impersonated(reservedUser, creatorGroup), "create", "namespace", "creator-tracking-kyverno-activation", "--dry-run=server", "-o", "json")...)
 		run(ctx, "kubectl", "annotate", "namespace", kyvernoPrePolicy, creatorAnnotation+"=forged", creatorGroupsAnnotation+"=forged", "--overwrite")
 		Eventually(func() map[string]string { return annotations(ctx, "namespace", kyvernoPrePolicy) }, time.Minute, time.Second).ShouldNot(HaveKey(creatorAnnotation))
 		Eventually(func() map[string]string { return annotations(ctx, "namespace", kyvernoPrePolicy) }, time.Minute, time.Second).ShouldNot(HaveKey(creatorGroupsAnnotation))
 		createNamespace(ctx, reservedUser, "creator-tracking-kyverno-mutating", creatorGroup)
 		waitAnnotation(ctx, "namespace", "creator-tracking-kyverno-mutating", creatorAnnotation, reservedUser)
+		// The creator probe above does not prove that the separate contributor
+		// MAP is active for UPDATE requests yet.
+		waitDryRunAnnotation(ctx, updatedAnnotation, "e2e-editor%25%2Ccomma",
+			append(impersonated(reservedEditor, editorGroup), "annotate", "namespace", "creator-tracking-kyverno-mutating",
+				"kyverno-editor=probe", "--overwrite", "--dry-run=server", "-o", "json")...)
 		run(ctx, append(impersonated(reservedEditor, editorGroup), "annotate", "namespace", "creator-tracking-kyverno-mutating", "kyverno-editor=seen", "--overwrite")...)
 		Eventually(func() string {
 			return annotations(ctx, "namespace", "creator-tracking-kyverno-mutating")[updatedAnnotation]
@@ -684,5 +698,136 @@ spec:
 			}
 			return nil
 		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+	})
+
+	It("skips repeated binding applies while Kyverno watches RBAC updates", func(ctx SpecContext) {
+		const bindingName = "creator-tracking-kyverno-noop-view-binding"
+		apply(ctx, `apiVersion: authorization.t-caas.telekom.com/v1alpha1
+kind: BindDefinition
+metadata: {name: creator-tracking-kyverno-noop}
+spec:
+  targetName: creator-tracking-kyverno-noop
+  subjects:
+  - kind: Group
+    name: creator-tracking-kyverno-noop-group
+    apiGroup: rbac.authorization.k8s.io
+  clusterRoleBindings:
+    clusterRoleRefs: [view]
+  roleBindings:
+  - namespace: creator-tracking-kyverno-e2e
+    clusterRoleRefs: [view]
+`)
+		Eventually(func() (string, error) {
+			output, err := runResult(ctx, "kubectl", "get", "binddefinition", "creator-tracking-kyverno-noop",
+				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+			return strings.TrimSpace(string(output)), err
+		}, 3*time.Minute, 2*time.Second).Should(Equal("True"))
+		Eventually(func() error {
+			_, err := get(ctx, "clusterrolebinding", bindingName, "-o", "json")
+			return err
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Eventually(func() error {
+			_, err := get(ctx, "rolebinding", bindingName, "-n", kyvernoNamespace, "-o", "json")
+			return err
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		apply(ctx, `apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata: {name: creator-tracking-binding-updates}
+spec:
+  background: false
+  rules:
+  - name: mark-binding-updates
+    match:
+      any:
+      - resources:
+          kinds: [RoleBinding, ClusterRoleBinding]
+          names: [creator-tracking-kyverno-noop-view-binding]
+          operations: [UPDATE]
+    mutate:
+      patchStrategicMerge:
+        metadata:
+          labels:
+            kyverno-e2e-update-probe: "true"
+`)
+		// Prove the Kyverno webhook is active before checking the operator:
+		// dry-run updates must carry its mutation without persisting it.
+		// kubectl label prints its locally patched object rather than the
+		// admission-mutated server response, so probe with kubectl patch.
+		for _, args := range [][]string{
+			{"clusterrolebinding", bindingName},
+			{"rolebinding", bindingName, "-n", kyvernoNamespace},
+		} {
+			Eventually(func() (string, error) {
+				patchArgs := append([]string{"kubectl", "patch"}, args...)
+				patchArgs = append(patchArgs, "--type=merge", "-p", `{"metadata":{"labels":{"kyverno-e2e-probe":"true"}}}`,
+					"--dry-run=server", "-o", "json")
+				output, err := runResult(ctx, patchArgs...)
+				if err != nil {
+					return "", fmt.Errorf("probe Kyverno RBAC admission: %w", err)
+				}
+				var object map[string]interface{}
+				if err := json.Unmarshal(output, &object); err != nil {
+					return "", fmt.Errorf("decode Kyverno RBAC probe: %w", err)
+				}
+				return value(object, "metadata", "labels", "kyverno-e2e-update-probe"), nil
+			}, 2*time.Minute, 2*time.Second).Should(Equal("true"))
+		}
+
+		stopForward := startEdgeMetricsPortForward("auth-operator-system", "auth-operator", edgeBindingMetricsPort)
+		defer stopForward()
+		var baseline [6]float64
+		Eventually(func() error {
+			var err error
+			baseline, err = edgeBindingCounters()
+			return err
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		run(ctx, "kubectl", "annotate", "binddefinition", "creator-tracking-kyverno-noop",
+			fmt.Sprintf("e2e.t-caas.telekom.com/reconcile-trigger=%d", time.Now().UnixNano()), "--overwrite")
+		Eventually(func() (bool, error) {
+			counters, err := edgeBindingCounters()
+			return counters[3] > baseline[3] && counters[4] > baseline[4], err
+		}, 2*time.Minute, time.Second).Should(BeTrue(), "both bindings must skip an unchanged reconciliation")
+		baseline, err := edgeBindingCounters()
+		Expect(err).NotTo(HaveOccurred())
+		Consistently(func() (bool, error) {
+			counters, err := edgeBindingCounters()
+			return counters[0] == baseline[0] && counters[1] == baseline[1], err
+		}, 75*time.Second, 3*time.Second).Should(BeTrue(), "periodic reconciliations must not send RBAC updates to Kyverno")
+
+		for _, args := range [][]string{
+			{"clusterrolebinding", bindingName},
+			{"rolebinding", bindingName, "-n", kyvernoNamespace},
+		} {
+			// Simulate a competing manager changing an owned atomic subject list.
+			// Kyverno adds a separate label on the same UPDATE; the controller
+			// must repair the list without fighting the external label.
+			patchArgs := append([]string{"kubectl", "patch"}, args...)
+			patchArgs = append(patchArgs, "--type=merge", "-p",
+				`{"subjects":[{"kind":"Group","name":"external-drift","apiGroup":"rbac.authorization.k8s.io"}],`+
+					`"metadata":{"labels":{"external-operator":"present"}}}`)
+			run(ctx, patchArgs...)
+			Eventually(func() (bool, error) {
+				object, err := get(ctx, append(args, "-o", "json")...)
+				if err != nil {
+					return false, err
+				}
+				return value(object, "subjects", "0", "name") == "creator-tracking-kyverno-noop-group" &&
+					value(object, "metadata", "labels", "external-operator") == "present" &&
+					value(object, "metadata", "labels", "kyverno-e2e-update-probe") == "true", nil
+			}, 2*time.Minute, time.Second).Should(BeTrue())
+		}
+		afterRepair, err := edgeBindingCounters()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(afterRepair[0]).To(BeNumerically(">", baseline[0]))
+		Expect(afterRepair[1]).To(BeNumerically(">", baseline[1]))
+		run(ctx, "kubectl", "annotate", "binddefinition", "creator-tracking-kyverno-noop",
+			fmt.Sprintf("e2e.t-caas.telekom.com/reconcile-trigger=%d", time.Now().UnixNano()), "--overwrite")
+		Eventually(func() (bool, error) {
+			counters, err := edgeBindingCounters()
+			return counters[0] == afterRepair[0] && counters[1] == afterRepair[1] &&
+				counters[3] > afterRepair[3] && counters[4] > afterRepair[4], err
+		}, 2*time.Minute, time.Second).Should(BeTrue(), "repaired bindings with Kyverno-owned labels must skip subsequent applies")
 	})
 })
