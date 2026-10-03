@@ -52,12 +52,6 @@ func (c *saWriteCounter) record(verb string, obj any) {
 	c.writes = append(c.writes, verb+" "+key)
 }
 
-func (c *saWriteCounter) reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writes = nil
-}
-
 func (c *saWriteCounter) get() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,7 +176,7 @@ var _ = Describe("BindDefinition explicitly external ServiceAccounts with compet
 	}
 
 	managersOf := func(sa *corev1.ServiceAccount) []string {
-		var managers []string
+		managers := make([]string, 0, len(sa.ManagedFields))
 		for _, mf := range sa.ManagedFields {
 			managers = append(managers, mf.Manager)
 		}

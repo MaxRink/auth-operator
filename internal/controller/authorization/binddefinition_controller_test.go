@@ -6311,3 +6311,47 @@ func TestReconcile_ServiceAccountOwnershipReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcile_MissingExternalServiceAccountWithMissingRoleRefUsesRoleRefBackoff(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	g.Expect(authorizationv1alpha1.AddToScheme(s)).To(Succeed())
+	g.Expect(rbacv1.AddToScheme(s)).To(Succeed())
+	g.Expect(corev1.AddToScheme(s)).To(Succeed())
+	subject := rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "provider", Namespace: "provider-ns"}
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{Name: "provider-missing-role", UID: "provider-missing-role-uid", Generation: 1,
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer}},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "provider",
+			Subjects:                   []rbacv1.Subject{subject},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: subject.Name, Namespace: subject.Namespace}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view", "missing-role"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(bd).
+		WithObjects(bd, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: subject.Namespace}}).Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(100)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(roleRefRequeueBase))
+
+	var updated authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, client.ObjectKey{Name: bd.Name}, &updated)).To(Succeed())
+	g.Expect(conditions.IsReady(&updated)).To(BeTrue())
+	g.Expect(updated.Status.BindReconciled).To(BeTrue())
+	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("provider-ns/provider: not found (creation opted out)"))
+	roleRefs := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.RoleRefValidCondition))
+	g.Expect(roleRefs).NotTo(BeNil())
+	g.Expect(roleRefs.Status).To(Equal(metav1.ConditionFalse))
+	refsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
+	g.Expect(refsReady).NotTo(BeNil())
+	g.Expect(refsReady.Status).To(Equal(metav1.ConditionFalse))
+	var crb rbacv1.ClusterRoleBinding
+	g.Expect(c.Get(ctx, client.ObjectKey{Name: "provider-view-binding"}, &crb)).To(Succeed())
+	g.Expect(crb.Subjects).To(ConsistOf(subject))
+}
