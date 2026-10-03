@@ -546,21 +546,12 @@ func (r *BindDefinitionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.handleMissingTargetNamespaces(ctx, bindDefinition, missingTargetNamespaces, markRoleRefsInvalid, requeueAfter)
 	}
 
+	// External ServiceAccounts belong to another controller. Their absence is
+	// reported by ServiceAccountRefsReady, but does not block applied bindings.
 	if len(bindDefinition.Status.SkippedServiceAccounts) > 0 {
-		requeueAfter := skippedServiceAccountRequeueAfter(bindDefinition, missingRoleRefCount)
-		conditions.MarkNotReady(bindDefinition, bindDefinition.Generation,
-			authorizationv1alpha1.ServiceAccountRefsSkippedReason,
-			authorizationv1alpha1.ServiceAccountRefsSkippedMessage,
-			bindDefinition.Status.SkippedServiceAccounts)
-		bindDefinition.Status.BindReconciled = false
 		r.recorder.Eventf(bindDefinition, nil, corev1.EventTypeWarning,
 			authorizationv1alpha1.EventReasonServiceAccountSkipped, authorizationv1alpha1.EventActionValidate,
 			"ServiceAccount subjects were skipped and not created: %v", bindDefinition.Status.SkippedServiceAccounts)
-		if err := r.applyStatus(ctx, bindDefinition); err != nil {
-			return ctrl.Result{}, fmt.Errorf("apply BindDefinition status for skipped ServiceAccounts: %w", err)
-		}
-		metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
-		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	// Mark Ready and apply final status via SSA (kstatus)
@@ -655,16 +646,6 @@ func (r *BindDefinitionReconciler) handleMissingRoleRefsError(
 	r.markStalled(ctx, bindDefinition, err)
 	metrics.ReconcileTotal.WithLabelValues(metrics.ControllerBindDefinition, metrics.ResultDegraded).Inc()
 	return ctrl.Result{RequeueAfter: RoleRefRequeueInterval}, nil
-}
-
-func skippedServiceAccountRequeueAfter(bindDefinition *authorizationv1alpha1.BindDefinition, missingRoleRefCount int) time.Duration {
-	if missingRoleRefCount == 0 {
-		return DefaultRequeueInterval
-	}
-
-	// Keep the normal opt-out retry cadence as a floor, while honoring
-	// exponential backoff once missing role references persist.
-	return max(DefaultRequeueInterval, calculateMissingRoleRefBackoff(bindDefinition))
 }
 
 // calculateMissingRoleRefBackoff returns an exponential backoff duration for

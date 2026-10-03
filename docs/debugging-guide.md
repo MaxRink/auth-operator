@@ -804,8 +804,10 @@ exists, it removes only this BindDefinition's historical owner/source metadata
 and records it as external. If it does not exist, the binding definition keeps
 reconciling its other resources but reports
 `status.conditions[?(@.type=="ServiceAccountRefsReady")]` as `False` and lists
-the reference in `status.skippedServiceAccounts`. Check that field and the
-`ServiceAccountSkipped` event while waiting for the provisioning controller.
+the reference in `status.skippedServiceAccounts`. The bindings are still
+applied and the BindDefinition can be `Ready=True`, so the provider is not
+blocked on its own RBAC. Check that field and the `ServiceAccountSkipped` event
+while waiting for the provisioning controller.
 Admission rejects references that omit a namespace, are duplicated, or do not
 match a ServiceAccount subject.
 

@@ -6222,3 +6222,136 @@ func TestCalculateMissingRoleRefBackoff(t *testing.T) {
 		})
 	}
 }
+
+func TestReconcile_ServiceAccountOwnershipReadiness(t *testing.T) {
+	for _, external := range []bool{false, true} {
+		t.Run(fmt.Sprintf("external=%t", external), func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := context.Background()
+			s := runtime.NewScheme()
+			g.Expect(authorizationv1alpha1.AddToScheme(s)).To(Succeed())
+			g.Expect(rbacv1.AddToScheme(s)).To(Succeed())
+			g.Expect(corev1.AddToScheme(s)).To(Succeed())
+			subject := rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "provider", Namespace: "provider-ns"}
+			bd := &authorizationv1alpha1.BindDefinition{
+				TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+				ObjectMeta: metav1.ObjectMeta{Name: "provider-rbac", UID: "provider-rbac-uid", Generation: 1,
+					Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer}},
+				Spec: authorizationv1alpha1.BindDefinitionSpec{
+					TargetName: "provider", Subjects: []rbacv1.Subject{subject},
+					ClusterRoleBindings: authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view"}},
+					RoleBindings:        []authorizationv1alpha1.NamespaceBinding{{Namespace: "target-ns", ClusterRoleRefs: []string{"view"}}},
+				},
+			}
+			if external {
+				bd.Spec.ExternalServiceAccountRefs = []authorizationv1alpha1.SARef{{Name: subject.Name, Namespace: subject.Namespace}}
+			}
+			c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(bd).
+				WithObjects(bd, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}},
+					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target-ns"}}).Build()
+			recorder := events.NewFakeRecorder(100)
+			r := &BindDefinitionReconciler{client: c, scheme: s, recorder: recorder}
+			saKey := client.ObjectKey{Name: subject.Name, Namespace: subject.Namespace}
+			reconcileReady := func(present bool) {
+				result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: bd.Name}})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(result.RequeueAfter).To(Equal(DefaultRequeueInterval))
+				var updated authorizationv1alpha1.BindDefinition
+				g.Expect(c.Get(ctx, client.ObjectKey{Name: bd.Name}, &updated)).To(Succeed())
+				g.Expect(conditions.IsReady(&updated)).To(BeTrue())
+				g.Expect(updated.Status.BindReconciled).To(BeTrue())
+				g.Expect(updated.Status.ObservedGeneration).To(Equal(bd.Generation))
+				refsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
+				g.Expect(refsReady).NotTo(BeNil())
+				if external && !present {
+					g.Expect(refsReady.Status).To(Equal(metav1.ConditionFalse))
+					g.Expect(updated.Status.SkippedServiceAccounts).To(HaveLen(1))
+					g.Expect(apierrors.IsNotFound(c.Get(ctx, saKey, &corev1.ServiceAccount{}))).To(BeTrue())
+					var emitted []string
+					for len(recorder.Events) > 0 {
+						emitted = append(emitted, <-recorder.Events)
+					}
+					g.Expect(emitted).To(ContainElement(ContainSubstring("Warning ServiceAccountSkipped")))
+				} else {
+					g.Expect(refsReady.Status).To(Equal(metav1.ConditionTrue))
+					g.Expect(updated.Status.SkippedServiceAccounts).To(BeEmpty())
+				}
+				var crb rbacv1.ClusterRoleBinding
+				g.Expect(c.Get(ctx, client.ObjectKey{Name: "provider-view-binding"}, &crb)).To(Succeed())
+				g.Expect(crb.Subjects).To(ConsistOf(subject))
+				var rb rbacv1.RoleBinding
+				g.Expect(c.Get(ctx, client.ObjectKey{Namespace: "target-ns", Name: "provider-view-binding"}, &rb)).To(Succeed())
+				g.Expect(rb.Subjects).To(ConsistOf(subject))
+			}
+			if external {
+				// Neither the external namespace nor ServiceAccount must gate installed RBAC.
+				reconcileReady(false)
+			}
+			g.Expect(c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: subject.Namespace}})).To(Succeed())
+			reconcileReady(!external)
+			for range 2 {
+				if external {
+					g.Expect(c.Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+						Name: subject.Name, Namespace: subject.Namespace, Labels: map[string]string{"provider": "owned"},
+					}})).To(Succeed())
+				}
+				reconcileReady(true)
+				var sa corev1.ServiceAccount
+				g.Expect(c.Get(ctx, saKey, &sa)).To(Succeed())
+				if external {
+					g.Expect(sa.OwnerReferences).To(BeEmpty())
+					g.Expect(sa.Labels).To(Equal(map[string]string{"provider": "owned"}))
+				} else {
+					g.Expect(sa.OwnerReferences).To(HaveLen(1))
+					g.Expect(sa.OwnerReferences[0].UID).To(Equal(bd.UID))
+				}
+				g.Expect(c.Delete(ctx, &sa)).To(Succeed())
+				reconcileReady(!external)
+			}
+		})
+	}
+}
+
+func TestReconcile_MissingExternalServiceAccountWithMissingRoleRefUsesRoleRefBackoff(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	s := runtime.NewScheme()
+	g.Expect(authorizationv1alpha1.AddToScheme(s)).To(Succeed())
+	g.Expect(rbacv1.AddToScheme(s)).To(Succeed())
+	g.Expect(corev1.AddToScheme(s)).To(Succeed())
+	subject := rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "provider", Namespace: "provider-ns"}
+	bd := &authorizationv1alpha1.BindDefinition{
+		TypeMeta: metav1.TypeMeta{APIVersion: authorizationv1alpha1.GroupVersion.String(), Kind: "BindDefinition"},
+		ObjectMeta: metav1.ObjectMeta{Name: "provider-missing-role", UID: "provider-missing-role-uid", Generation: 1,
+			Finalizers: []string{authorizationv1alpha1.BindDefinitionFinalizer}},
+		Spec: authorizationv1alpha1.BindDefinitionSpec{
+			TargetName:                 "provider",
+			Subjects:                   []rbacv1.Subject{subject},
+			ExternalServiceAccountRefs: []authorizationv1alpha1.SARef{{Name: subject.Name, Namespace: subject.Namespace}},
+			ClusterRoleBindings:        authorizationv1alpha1.ClusterBinding{ClusterRoleRefs: []string{"view", "missing-role"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(bd).
+		WithObjects(bd, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "view"}},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: subject.Namespace}}).Build()
+	r := &BindDefinitionReconciler{client: c, scheme: s, recorder: events.NewFakeRecorder(100)}
+
+	result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKey{Name: bd.Name}})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(result.RequeueAfter).To(Equal(roleRefRequeueBase))
+
+	var updated authorizationv1alpha1.BindDefinition
+	g.Expect(c.Get(ctx, client.ObjectKey{Name: bd.Name}, &updated)).To(Succeed())
+	g.Expect(conditions.IsReady(&updated)).To(BeTrue())
+	g.Expect(updated.Status.BindReconciled).To(BeTrue())
+	g.Expect(updated.Status.SkippedServiceAccounts).To(ConsistOf("provider-ns/provider: not found (creation opted out)"))
+	roleRefs := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.RoleRefValidCondition))
+	g.Expect(roleRefs).NotTo(BeNil())
+	g.Expect(roleRefs.Status).To(Equal(metav1.ConditionFalse))
+	refsReady := findCondition(updated.Status.Conditions, string(authorizationv1alpha1.ServiceAccountRefsReadyCondition))
+	g.Expect(refsReady).NotTo(BeNil())
+	g.Expect(refsReady.Status).To(Equal(metav1.ConditionFalse))
+	var crb rbacv1.ClusterRoleBinding
+	g.Expect(c.Get(ctx, client.ObjectKey{Name: "provider-view-binding"}, &crb)).To(Succeed())
+	g.Expect(crb.Subjects).To(ConsistOf(subject))
+}
