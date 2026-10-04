@@ -89,23 +89,24 @@ potentially relevant here include `pkg/patch`, `pkg/remoteclient`,
 are under discussion in [library PR #5](https://github.com/telekom/t-caas-go-library/pull/5),
 which is still open; do not treat that package as merged or available yet.
 
-Auth Operator's own [PR #580](https://github.com/telekom/auth-operator/pull/580)
-introduced generic skip-if-unchanged SSA helpers in `pkg/ssa`. It is a useful
-local implementation, not a reason to grow another general-purpose SSA
-framework; compare its typed/cache-based skip behavior with Flux `pkg/ssa`'s
-server-evaluated drift detection before choosing.
+Auth Operator's open [PR #580](https://github.com/telekom/auth-operator/pull/580)
+proposes generic skip-if-unchanged SSA helpers in `pkg/ssa`; this code is not
+yet part of `main`. Compare its proposed typed/cache-based skip behavior with
+Flux `pkg/ssa`'s server-evaluated drift detection before choosing. Do not grow
+another general-purpose SSA framework while PR #580 and library PR #5 remain
+under review.
 
 Existing migration candidates (documentation only; do not change them as part of
 this rule): `pkg/conditions/` can use Flux conditions, apimachinery condition
 helpers, and kstatus while retaining coordinated Ready-condition policy;
-`pkg/tracing/tracing.go` can use OpenTelemetry directly;
-`pkg/ssa/patchhelper.go` and the generic helpers from PR #580 can be compared
-with Flux SSA and library PR #5; controller/webhook envtest suites should keep
-using native envtest with pinned absolute assets; `test/utils/utils.go` wait,
-decoder, and apply helpers can use e2e-framework and Kubernetes APIs while
-retaining intentional `ForceOwnership`; and
-`internal/webhook/certrotator/` can build on `cert-controller`. Verify current
-call sites and semantics before proposing any migration.
+`pkg/ssa/patchhelper.go` can be compared with Flux SSA; generic helpers
+proposed by PR #580 and library PR #5 are not merged; controller/webhook
+envtest suites should keep using native envtest with pinned absolute assets;
+and `test/utils/utils.go` wait, decoder, and apply helpers can use e2e-framework
+and Kubernetes APIs while retaining intentional `ForceOwnership`. The tracing
+package already uses OpenTelemetry directly, and the webhook certificate
+rotator already uses `cert-controller`; neither is a migration candidate.
+Verify current call sites and semantics before proposing any migration.
 
 Only add convenience wrappers when the same glue demonstrably repeats across
 multiple repositories. Contribute that shared glue to `telekom/t-caas-go-library`
