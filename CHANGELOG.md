@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Build with Go 1.26.9 and golang.org/x/net 0.61.0. Go 1.26.6 is affected by
+  standard library vulnerabilities in net/http, html/template, net/textproto
+  and crypto/tls (GO-2026-6617 and others, fixed in 1.26.9); x/net 0.59.0 is
+  affected by GO-2026-6617 (fixed in 0.60.0).
+
 ### Fixed
 
 - Select compatible namespace ownership on CREATE using the request name and
